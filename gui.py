@@ -16,9 +16,9 @@ from PySide6.QtWidgets import (
     QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView,
     QLabel, QPushButton, QComboBox, QLineEdit, QCheckBox,
     QFileDialog, QMessageBox, QDialog, QGroupBox, QStatusBar,
-    QMenuBar, QMenu, QAbstractItemView
+    QMenuBar, QMenu, QAbstractItemView, QDateEdit
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QDate
 from PySide6.QtGui import QAction, QColor, QKeySequence, QIcon
 
 from hytek_parser import parse_hytek_pdf
@@ -28,13 +28,29 @@ DB_DIR = Path.home() / ".hytek_results"
 DB_PATH = DB_DIR / "results.db"
 
 
+def normalize_date(date_str):
+    """Convert date string to ISO format (YYYY-MM-DD) for proper sorting/comparison"""
+    if not date_str:
+        return None
+    import re
+    # Already ISO format
+    if re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
+        return date_str
+    # M/D/YYYY or MM/DD/YYYY
+    m = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{4})$', date_str)
+    if m:
+        return f"{m.group(3)}-{int(m.group(1)):02d}-{int(m.group(2)):02d}"
+    return date_str
+
+
 class RelayDetailsDialog(QDialog):
     """Dialog to show relay swimmers and save legs as individual swims"""
 
-    def __init__(self, parent, row_data, db_path):
+    def __init__(self, parent, row_data, db_path, read_only=False):
         super().__init__(parent)
         self.row_data = row_data
         self.db_path = db_path
+        self.read_only = read_only
         self.selected_legs = set()
 
         self.setWindowTitle(f"Relay Details - {row_data['team']}")
@@ -57,11 +73,6 @@ class RelayDetailsDialog(QDialog):
         layout.addWidget(QLabel("<b>Relay Swimmers:</b>"))
 
         self.table = QTableWidget()
-        self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(['', 'Leg', 'Name', 'Year', 'Split Time'])
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.cellClicked.connect(self.on_cell_clicked)
 
         # Parse relay swimmers and splits
         relay_swimmers = json.loads(self.row_data['relay_swimmers']) if self.row_data['relay_swimmers'] else []
@@ -71,36 +82,63 @@ class RelayDetailsDialog(QDialog):
         self.leg_times = self.calculate_leg_times(splits, len(relay_swimmers), self.row_data['event_distance'])
         self.relay_swimmers = relay_swimmers
 
-        self.table.setRowCount(len(relay_swimmers))
-        for i, swimmer in enumerate(relay_swimmers):
-            name, year, leg = swimmer
-            leg_time = self.format_time(self.leg_times[i]) if i < len(self.leg_times) and self.leg_times[i] else ""
+        if self.read_only:
+            # Read-only: no checkboxes, just Leg | Name | Year | Split Time
+            self.table.setColumnCount(4)
+            self.table.setHorizontalHeaderLabels(['Leg', 'Name', 'Year', 'Split Time'])
+            self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+            self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
 
-            checkbox_item = QTableWidgetItem()
-            checkbox_item.setCheckState(Qt.Unchecked)
-            self.table.setItem(i, 0, checkbox_item)
-            self.table.setItem(i, 1, QTableWidgetItem(str(leg)))
-            self.table.setItem(i, 2, QTableWidgetItem(name))
-            self.table.setItem(i, 3, QTableWidgetItem(year or ''))
-            self.table.setItem(i, 4, QTableWidgetItem(leg_time))
+            self.table.setRowCount(len(relay_swimmers))
+            for i, swimmer in enumerate(relay_swimmers):
+                name, year, leg = swimmer
+                leg_time = self.format_time(self.leg_times[i]) if i < len(self.leg_times) and self.leg_times[i] else ""
+                self.table.setItem(i, 0, QTableWidgetItem(str(leg)))
+                self.table.setItem(i, 1, QTableWidgetItem(name))
+                self.table.setItem(i, 2, QTableWidgetItem(year or ''))
+                self.table.setItem(i, 3, QTableWidgetItem(leg_time))
 
-        self.table.setColumnWidth(0, 30)
-        self.table.setColumnWidth(1, 40)
-        self.table.setColumnWidth(3, 50)
-        self.table.setColumnWidth(4, 100)
+            self.table.setColumnWidth(0, 40)
+            self.table.setColumnWidth(2, 50)
+            self.table.setColumnWidth(3, 100)
+        else:
+            # Editable: checkboxes for saving individual legs
+            self.table.setColumnCount(5)
+            self.table.setHorizontalHeaderLabels(['', 'Leg', 'Name', 'Year', 'Split Time'])
+            self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+            self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+            self.table.cellClicked.connect(self.on_cell_clicked)
+
+            self.table.setRowCount(len(relay_swimmers))
+            for i, swimmer in enumerate(relay_swimmers):
+                name, year, leg = swimmer
+                leg_time = self.format_time(self.leg_times[i]) if i < len(self.leg_times) and self.leg_times[i] else ""
+                checkbox_item = QTableWidgetItem()
+                checkbox_item.setCheckState(Qt.Unchecked)
+                self.table.setItem(i, 0, checkbox_item)
+                self.table.setItem(i, 1, QTableWidgetItem(str(leg)))
+                self.table.setItem(i, 2, QTableWidgetItem(name))
+                self.table.setItem(i, 3, QTableWidgetItem(year or ''))
+                self.table.setItem(i, 4, QTableWidgetItem(leg_time))
+
+            self.table.setColumnWidth(0, 30)
+            self.table.setColumnWidth(1, 40)
+            self.table.setColumnWidth(3, 50)
+            self.table.setColumnWidth(4, 100)
 
         layout.addWidget(self.table)
 
         # Buttons
         btn_layout = QHBoxLayout()
 
-        select_all_btn = QPushButton("Select All")
-        select_all_btn.clicked.connect(self.select_all)
-        btn_layout.addWidget(select_all_btn)
+        if not self.read_only:
+            select_all_btn = QPushButton("Select All")
+            select_all_btn.clicked.connect(self.select_all)
+            btn_layout.addWidget(select_all_btn)
 
-        save_btn = QPushButton("Save Selected as Individual Swims")
-        save_btn.clicked.connect(self.save_selected_legs)
-        btn_layout.addWidget(save_btn)
+            save_btn = QPushButton("Save Selected as Individual Swims")
+            save_btn.clicked.connect(self.save_selected_legs)
+            btn_layout.addWidget(save_btn)
 
         btn_layout.addStretch()
 
@@ -127,33 +165,33 @@ class RelayDetailsDialog(QDialog):
         Calculate individual leg times from splits.
 
         For 200 relays (4x50): splits are already individual leg times [leg1, leg2, leg3, leg4]
-        For 400/800 relays (4x100, 4x200): splits may contain intermediate 50y splits
+        For 400/800 relays (4x100, 4x200): splits are 50 split, 100 cumulative per swimmer.
+          The last value in each swimmer's group is their total leg time.
         """
         if not splits or not num_swimmers:
             return []
 
         leg_distance = event_distance // num_swimmers if num_swimmers else 50
-        splits_per_leg = leg_distance // 50  # How many 50y splits per leg
+        splits_per_leg = leg_distance // 50  # How many split values per leg
 
         # Check if splits are already individual leg times (one per swimmer)
-        # This is the case when len(splits) == num_swimmers
         if len(splits) == num_swimmers:
-            # Splits are already individual leg times
             return list(splits)
 
-        # For longer relays, sum up the intermediate splits for each leg
+        # Each swimmer has splits_per_leg values: 50 split, 100 cumulative, etc.
+        # The last value in each group is the cumulative leg time.
         leg_times = []
         for i in range(num_swimmers):
             start_idx = i * splits_per_leg
             end_idx = start_idx + splits_per_leg
 
             if end_idx <= len(splits):
-                # Sum the intermediate splits for this leg
-                leg_time = sum(splits[start_idx:end_idx])
+                # Last value is the cumulative time for this leg
+                leg_time = splits[end_idx - 1]
                 leg_times.append(leg_time)
             elif start_idx < len(splits):
-                # Partial data - sum what we have
-                leg_time = sum(splits[start_idx:])
+                # Partial data - take the last available split
+                leg_time = splits[-1] if start_idx < len(splits) else None
                 leg_times.append(leg_time)
             else:
                 leg_times.append(None)
@@ -204,20 +242,30 @@ class RelayDetailsDialog(QDialog):
             leg_event = f"50 {leg_stroke} ({leg_type})"
             time_str = self.format_time(leg_time)
 
-            cursor.execute('''
-                INSERT INTO results (meet_id, place, name, year, team, event_name, event_gender,
-                    event_distance, finals_time, finals_seconds, points, time_standard,
-                    is_relay, is_diving, is_exhibition, is_dq, is_scratch, dq_reason, splits, relay_swimmers)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                self.row_data['meet_id'], None, name, year, self.row_data['team'], leg_event,
-                self.row_data['event_gender'], 50, time_str, leg_time, None, None,
-                0, 0, 0, 0, 0, None, '[]', '[]'
-            ))
-
-            result_id = cursor.lastrowid
-            cursor.execute('INSERT OR IGNORE INTO saved_results (result_id) VALUES (?)', (result_id,))
-            saved_count += 1
+            try:
+                cursor.execute('''
+                    INSERT OR IGNORE INTO results (meet_id, place, name, year, team, event_name, event_gender,
+                        event_distance, finals_time, finals_seconds, points, time_standard,
+                        is_relay, is_diving, is_exhibition, is_dq, is_scratch, dq_reason, splits, relay_swimmers)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    self.row_data['meet_id'], None, name, year, self.row_data['team'], leg_event,
+                    self.row_data['event_gender'], 50, time_str, leg_time, None, None,
+                    0, 0, 0, 0, 0, None, '[]', '[]'
+                ))
+                if cursor.rowcount > 0:
+                    result_id = cursor.lastrowid
+                    cursor.execute('INSERT OR IGNORE INTO saved_results (result_id) VALUES (?)', (result_id,))
+                    saved_count += 1
+                else:
+                    # Already exists - find it and ensure it's saved
+                    cursor.execute('''SELECT id FROM results WHERE meet_id = ? AND name = ? AND event_name = ? AND finals_time = ?''',
+                                  (self.row_data['meet_id'], name, leg_event, time_str))
+                    existing = cursor.fetchone()
+                    if existing:
+                        cursor.execute('INSERT OR IGNORE INTO saved_results (result_id) VALUES (?)', (existing['id'],))
+            except Exception:
+                pass
 
         conn.commit()
         conn.close()
@@ -305,6 +353,16 @@ class MeetResultsApp(QMainWindow):
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_meet ON results(meet_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_team ON results(team)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_name ON results(name)')
+
+        # Prevent duplicate results (same swimmer, event, time at same meet)
+        cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_no_dup ON results(meet_id, name, event_name, finals_time)')
+
+        # Migrate existing dates to ISO format
+        cursor.execute('SELECT id, meet_date FROM meets WHERE meet_date IS NOT NULL')
+        for row in cursor.fetchall():
+            iso = normalize_date(row['meet_date'])
+            if iso != row['meet_date']:
+                cursor.execute('UPDATE meets SET meet_date = ? WHERE id = ?', (iso, row['id']))
 
         conn.commit()
         conn.close()
@@ -603,6 +661,36 @@ class MeetResultsApp(QMainWindow):
         header_layout.addStretch()
         layout.addLayout(header_layout)
 
+        # Date range filter
+        date_layout = QHBoxLayout()
+        date_layout.addWidget(QLabel("Date Range:"))
+
+        self.relay_use_dates = QCheckBox("Filter by date")
+        self.relay_use_dates.setChecked(False)
+        self.relay_use_dates.stateChanged.connect(self.on_relay_date_toggle)
+        date_layout.addWidget(self.relay_use_dates)
+
+        date_layout.addWidget(QLabel("From:"))
+        self.relay_date_from = QDateEdit()
+        self.relay_date_from.setCalendarPopup(True)
+        self.relay_date_from.setDisplayFormat("M/d/yyyy")
+        self.relay_date_from.setDate(QDate.currentDate().addYears(-1))
+        self.relay_date_from.setEnabled(False)
+        self.relay_date_from.dateChanged.connect(self.compute_best_relays)
+        date_layout.addWidget(self.relay_date_from)
+
+        date_layout.addWidget(QLabel("To:"))
+        self.relay_date_to = QDateEdit()
+        self.relay_date_to.setCalendarPopup(True)
+        self.relay_date_to.setDisplayFormat("M/d/yyyy")
+        self.relay_date_to.setDate(QDate.currentDate())
+        self.relay_date_to.setEnabled(False)
+        self.relay_date_to.dateChanged.connect(self.compute_best_relays)
+        date_layout.addWidget(self.relay_date_to)
+
+        date_layout.addStretch()
+        layout.addLayout(date_layout)
+
         # Relay results area - use a scroll area
         from PySide6.QtWidgets import QScrollArea, QFrame
 
@@ -616,6 +704,13 @@ class MeetResultsApp(QMainWindow):
 
         scroll.setWidget(self.relay_container)
         layout.addWidget(scroll)
+
+    def on_relay_date_toggle(self, state):
+        """Enable/disable date range pickers"""
+        enabled = state == Qt.Checked.value if hasattr(Qt.Checked, 'value') else bool(state)
+        self.relay_date_from.setEnabled(enabled)
+        self.relay_date_to.setEnabled(enabled)
+        self.compute_best_relays()
 
     def compute_best_relays(self):
         """Compute optimal relay lineups from saved results for both genders"""
@@ -636,14 +731,22 @@ class MeetResultsApp(QMainWindow):
         results_by_gender = {}
         for gender in ["Women", "Men"]:
             query = '''
-                SELECT r.* FROM saved_results s
+                SELECT r.*, m.meet_name FROM saved_results s
                 JOIN results r ON s.result_id = r.id
-                WHERE r.event_gender = ? AND r.is_dq = 0 AND r.is_scratch = 0
+                JOIN meets m ON r.meet_id = m.id
+                WHERE r.event_gender = ? AND r.is_relay = 0 AND r.is_dq = 0 AND r.is_scratch = 0
             '''
             params = [gender]
             if team:
                 query += ' AND r.team = ?'
                 params.append(team)
+
+            # Date range filter
+            if self.relay_use_dates.isChecked():
+                date_from = self.relay_date_from.date().toString("yyyy-MM-dd")
+                date_to = self.relay_date_to.date().toString("yyyy-MM-dd")
+                query += ' AND m.meet_date >= ? AND m.meet_date <= ?'
+                params.extend([date_from, date_to])
 
             cursor.execute(query, params)
             results_by_gender[gender] = [dict(row) for row in cursor.fetchall()]
@@ -683,7 +786,7 @@ class MeetResultsApp(QMainWindow):
     def parse_swimmer_times(self, results):
         """
         Parse results into a dictionary of swimmer times.
-        Returns: {swimmer_name: {(distance, stroke): [(time, is_leadoff_eligible, source), ...]}}
+        Returns: {swimmer_name: {(distance, stroke): [(time, is_leadoff_eligible, source, meet_name), ...]}}
 
         - Individual event times are leadoff eligible
         - Relay lead-off splits are leadoff eligible
@@ -696,6 +799,7 @@ class MeetResultsApp(QMainWindow):
             distance = r['event_distance'] or 0
             time_seconds = r['finals_seconds']
             name = r['name'] or ''
+            meet_name = r.get('meet_name', '') or ''
 
             if not name or not time_seconds or time_seconds <= 0:
                 continue
@@ -721,7 +825,7 @@ class MeetResultsApp(QMainWindow):
             if key not in swimmer_times[name]:
                 swimmer_times[name][key] = []
 
-            swimmer_times[name][key].append((time_seconds, is_leadoff_eligible, source))
+            swimmer_times[name][key].append((time_seconds, is_leadoff_eligible, source, meet_name))
 
         return swimmer_times
 
@@ -743,48 +847,114 @@ class MeetResultsApp(QMainWindow):
 
     def compute_single_relay(self, swimmer_times, distance, strokes, is_medley):
         """
-        Compute optimal relay lineup.
-        Returns: [(swimmer_name, stroke, time, source), ...] or None if not enough swimmers
+        Compute optimal relay lineup using exhaustive search over top candidates.
+        Handles swimmers who are competitive in multiple strokes by finding the
+        assignment that minimises total relay time.
+        Returns: [(swimmer_name, stroke, time, source, meet_name), ...]
         """
-        relay = []
-        used_swimmers = set()
-
+        # Build candidate lists per leg (top 8 per leg is enough; 8^4 = 4096 max combos)
+        # Each candidate: (swimmer, time, source, meet_name)
+        leg_candidates = []
         for leg_idx, stroke in enumerate(strokes if is_medley else ['Freestyle'] * 4):
             is_leadoff = (leg_idx == 0)
             key = (distance, stroke)
-
-            # Find best available swimmer for this leg
             candidates = []
             for swimmer, times_dict in swimmer_times.items():
-                if swimmer in used_swimmers:
-                    continue
                 if key not in times_dict:
                     continue
-
-                # Get best eligible time for this swimmer
                 best_time = None
                 best_source = None
-                for time, leadoff_eligible, source in times_dict[key]:
+                best_meet = None
+                for time, leadoff_eligible, source, meet_name in times_dict[key]:
                     if is_leadoff and not leadoff_eligible:
-                        continue  # Skip non-leadoff eligible times for lead-off position
+                        continue
                     if best_time is None or time < best_time:
                         best_time = time
                         best_source = source
-
+                        best_meet = meet_name
                 if best_time is not None:
-                    candidates.append((swimmer, best_time, best_source))
+                    candidates.append((swimmer, best_time, best_source, best_meet))
+            candidates.sort(key=lambda x: x[1])
+            leg_candidates.append(candidates[:8])
 
-            if not candidates:
-                # Not enough swimmers for this leg
-                relay.append((None, stroke, None, None))
-            else:
-                # Pick the fastest
-                candidates.sort(key=lambda x: x[1])
-                swimmer, time, source = candidates[0]
-                relay.append((swimmer, stroke, time, source))
-                used_swimmers.add(swimmer)
+        # For free relays (all same stroke), just pick top 4 distinct swimmers
+        if not is_medley:
+            seen = set()
+            relay = []
+            # Leg 0 needs leadoff-eligible
+            for c in leg_candidates[0]:
+                if c[0] not in seen:
+                    relay.append((c[0], 'Freestyle', c[1], c[2], c[3]))
+                    seen.add(c[0])
+                    break
+            # Fill remaining legs from all candidates (re-derive with any time)
+            key = (distance, 'Freestyle')
+            all_candidates = []
+            for swimmer, times_dict in swimmer_times.items():
+                if swimmer in seen or key not in times_dict:
+                    continue
+                best_time = None
+                best_source = None
+                best_meet = None
+                for t, _, s, mn in times_dict[key]:
+                    if best_time is None or t < best_time:
+                        best_time = t
+                        best_source = s
+                        best_meet = mn
+                if best_time is not None:
+                    all_candidates.append((swimmer, best_time, best_source, best_meet))
+            all_candidates.sort(key=lambda x: x[1])
+            for c in all_candidates:
+                if len(relay) >= 4:
+                    break
+                relay.append((c[0], 'Freestyle', c[1], c[2], c[3]))
+            while len(relay) < 4:
+                relay.append((None, 'Freestyle', None, None, None))
+            return relay
 
-        return relay
+        # Medley relay: exhaustive search over top candidates per leg
+        best_total = float('inf')
+        best_assignment = None
+
+        for c0 in leg_candidates[0]:
+            for c1 in leg_candidates[1]:
+                if c1[0] == c0[0]:
+                    continue
+                t01 = c0[1] + c1[1]
+                if t01 >= best_total:
+                    continue  # prune
+                for c2 in leg_candidates[2]:
+                    if c2[0] in (c0[0], c1[0]):
+                        continue
+                    t012 = t01 + c2[1]
+                    if t012 >= best_total:
+                        continue  # prune
+                    for c3 in leg_candidates[3]:
+                        if c3[0] in (c0[0], c1[0], c2[0]):
+                            continue
+                        total = t012 + c3[1]
+                        if total < best_total:
+                            best_total = total
+                            best_assignment = [c0, c1, c2, c3]
+
+        if best_assignment is None:
+            # Not enough swimmers — fill what we can
+            relay = []
+            used = set()
+            for leg_idx, stroke in enumerate(strokes):
+                placed = False
+                for c in leg_candidates[leg_idx]:
+                    if c[0] not in used:
+                        relay.append((c[0], stroke, c[1], c[2], c[3]))
+                        used.add(c[0])
+                        placed = True
+                        break
+                if not placed:
+                    relay.append((None, stroke, None, None, None))
+            return relay
+
+        return [(c[0], stroke, c[1], c[2], c[3])
+                for c, stroke in zip(best_assignment, strokes)]
 
     def add_relay_row(self, relay_name, women_result, men_result, strokes, is_medley):
         """Add a relay row with Women on left, Men on right"""
@@ -852,7 +1022,7 @@ class MeetResultsApp(QMainWindow):
         grid.setSpacing(2)
         grid.setContentsMargins(0, 0, 0, 0)
 
-        for row, (swimmer, stroke, time, source) in enumerate(relay_result):
+        for row, (swimmer, stroke, time, source, meet_name) in enumerate(relay_result):
             # Leg number
             leg_label = QLabel(f"{row + 1}.")
             leg_label.setMinimumWidth(25)
@@ -874,11 +1044,18 @@ class MeetResultsApp(QMainWindow):
                 time_label = QLabel(time_str)
                 time_label.setAlignment(Qt.AlignRight)
                 grid.addWidget(time_label, row, 2)
+
+                # Meet name
+                meet_short = (meet_name or '')[:25]
+                meet_label = QLabel(meet_short)
+                meet_label.setStyleSheet("color: gray; font-size: 11px;")
+                grid.addWidget(meet_label, row, 3)
             else:
                 empty = QLabel("—")
                 empty.setStyleSheet("color: palette(mid);")
                 grid.addWidget(empty, row, 1)
                 grid.addWidget(QLabel(""), row, 2)
+                grid.addWidget(QLabel(""), row, 3)
 
         layout.addLayout(grid)
         return widget
@@ -968,10 +1145,10 @@ class MeetResultsApp(QMainWindow):
 
         # Update event filter - strip gender prefix to avoid duplicates
         if self.current_meet_id:
-            cursor.execute('SELECT DISTINCT event_name FROM results WHERE meet_id = ? ORDER BY event_distance, event_name',
+            cursor.execute('SELECT DISTINCT event_name FROM results WHERE meet_id = ? ORDER BY is_relay, event_distance, event_name',
                           (self.current_meet_id,))
         else:
-            cursor.execute('SELECT DISTINCT event_name FROM results ORDER BY event_distance, event_name')
+            cursor.execute('SELECT DISTINCT event_name FROM results ORDER BY is_relay, event_distance, event_name')
 
         # Strip gender prefix and relay/lead-off suffixes from event names and deduplicate
         events_set = set()
@@ -1264,25 +1441,39 @@ class MeetResultsApp(QMainWindow):
             leg_event = f"{leg_distance} {leg_stroke} ({leg_type})"
             time_str = self.format_time(leg_time)
 
-            cursor.execute('''
-                INSERT INTO results (meet_id, place, name, year, team, event_name, event_gender,
-                    event_distance, finals_time, finals_seconds, points, time_standard,
-                    is_relay, is_diving, is_exhibition, is_dq, is_scratch, dq_reason, splits, relay_swimmers)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                row['meet_id'], None, name, year, row['team'], leg_event,
-                row['event_gender'], leg_distance, time_str, leg_time, None, None,
-                0, 0, 0, 0, 0, None, '[]', '[]'
-            ))
-
-            result_id = cursor.lastrowid
-            cursor.execute('INSERT OR IGNORE INTO saved_results (result_id) VALUES (?)', (result_id,))
-            saved_count += 1
+            try:
+                cursor.execute('''
+                    INSERT OR IGNORE INTO results (meet_id, place, name, year, team, event_name, event_gender,
+                        event_distance, finals_time, finals_seconds, points, time_standard,
+                        is_relay, is_diving, is_exhibition, is_dq, is_scratch, dq_reason, splits, relay_swimmers)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    row['meet_id'], None, name, year, row['team'], leg_event,
+                    row['event_gender'], leg_distance, time_str, leg_time, None, None,
+                    0, 0, 0, 0, 0, None, '[]', '[]'
+                ))
+                if cursor.rowcount > 0:
+                    result_id = cursor.lastrowid
+                    cursor.execute('INSERT OR IGNORE INTO saved_results (result_id) VALUES (?)', (result_id,))
+                    saved_count += 1
+                else:
+                    # Already exists - find it and make sure it's saved
+                    cursor.execute('''SELECT id FROM results WHERE meet_id = ? AND name = ? AND event_name = ? AND finals_time = ?''',
+                                  (row['meet_id'], name, leg_event, time_str))
+                    existing = cursor.fetchone()
+                    if existing:
+                        cursor.execute('INSERT OR IGNORE INTO saved_results (result_id) VALUES (?)', (existing['id'],))
+            except sqlite3.IntegrityError:
+                pass
 
         return saved_count
 
     def calculate_relay_leg_times(self, splits, num_swimmers, event_distance):
-        """Calculate individual leg times from splits"""
+        """Calculate individual leg times from splits.
+
+        Splits are 50 split, 100 cumulative, etc. per swimmer.
+        The last value in each swimmer's group is their total leg time.
+        """
         if not splits or not num_swimmers:
             return []
 
@@ -1293,17 +1484,17 @@ class MeetResultsApp(QMainWindow):
         if len(splits) == num_swimmers:
             return list(splits)
 
-        # For longer relays, sum up the intermediate splits for each leg
+        # Each swimmer has splits_per_leg values; last value is the cumulative leg time
         leg_times = []
         for i in range(num_swimmers):
             start_idx = i * splits_per_leg
             end_idx = start_idx + splits_per_leg
 
             if end_idx <= len(splits):
-                leg_time = sum(splits[start_idx:end_idx])
+                leg_time = splits[end_idx - 1]
                 leg_times.append(leg_time)
             elif start_idx < len(splits):
-                leg_time = sum(splits[start_idx:])
+                leg_time = splits[len(splits) - 1]
                 leg_times.append(leg_time)
             else:
                 leg_times.append(None)
@@ -1322,10 +1513,12 @@ class MeetResultsApp(QMainWindow):
         return patterns.get(stroke, f'%{stroke}%')
 
     def extract_distance_for_sort(self, event_name):
-        """Extract numeric distance from event name for sorting"""
+        """Extract sort key from event name: relays sort after all individual events"""
         import re
+        is_relay = 1 if 'Relay' in event_name else 0
         match = re.search(r'(\d+)', event_name)
-        return int(match.group(1)) if match else 0
+        distance = int(match.group(1)) if match else 0
+        return (is_relay, distance)
 
     def strip_gender_prefix(self, event_name):
         """Remove Women/Men prefix from event name"""
@@ -1379,37 +1572,58 @@ class MeetResultsApp(QMainWindow):
                 return
 
             meet_name = meet_info.get('meet_name') or Path(filepath).stem
-            meet_date = meet_info.get('meet_date')
+            meet_date = normalize_date(meet_info.get('meet_date'))
 
             conn = self.get_db()
             cursor = conn.cursor()
 
-            cursor.execute('INSERT INTO meets (filename, meet_name, meet_date) VALUES (?, ?, ?)',
-                          (Path(filepath).name, meet_name, meet_date))
-            meet_id = cursor.lastrowid
+            # Check if this meet was already loaded
+            cursor.execute('SELECT id FROM meets WHERE meet_name = ? AND meet_date = ?',
+                          (meet_name, meet_date))
+            existing = cursor.fetchone()
+            if existing:
+                reply = QMessageBox.question(self, "Duplicate Meet",
+                    f"'{meet_name}' is already loaded. Load again anyway?",
+                    QMessageBox.Yes | QMessageBox.No)
+                if reply != QMessageBox.Yes:
+                    conn.close()
+                    self.status_bar.showMessage("Load cancelled - meet already exists")
+                    return
+                meet_id = existing['id']
+            else:
+                cursor.execute('INSERT INTO meets (filename, meet_name, meet_date) VALUES (?, ?, ?)',
+                              (Path(filepath).name, meet_name, meet_date))
+                meet_id = cursor.lastrowid
 
             loaded_count = 0
+            skipped_dup = 0
             for idx, row in df.iterrows():
                 # Skip diving events
                 if row.get('is_diving'):
                     continue
 
-                cursor.execute('''
-                    INSERT INTO results (meet_id, place, name, year, team, event_name, event_gender,
-                        event_distance, finals_time, finals_seconds, points, time_standard,
-                        is_relay, is_diving, is_exhibition, is_dq, is_scratch, dq_reason, splits, relay_swimmers)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    meet_id, row.get('place'), row.get('name', ''), row.get('year', ''),
-                    row.get('team', ''), row.get('event_name', ''), row.get('event_gender', ''),
-                    row.get('event_distance', 0), row.get('finals_time', ''), row.get('finals_seconds'),
-                    row.get('points'), row.get('time_standard', ''),
-                    1 if row.get('is_relay') else 0, 0,  # is_diving always 0 now
-                    1 if row.get('is_exhibition') else 0, 1 if row.get('is_dq') else 0,
-                    1 if row.get('is_scratch') else 0, row.get('dq_reason', ''),
-                    json.dumps(row.get('splits', [])), json.dumps(row.get('relay_swimmers', []))
-                ))
-                loaded_count += 1
+                try:
+                    cursor.execute('''
+                        INSERT OR IGNORE INTO results (meet_id, place, name, year, team, event_name, event_gender,
+                            event_distance, finals_time, finals_seconds, points, time_standard,
+                            is_relay, is_diving, is_exhibition, is_dq, is_scratch, dq_reason, splits, relay_swimmers)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        meet_id, row.get('place'), row.get('name', ''), row.get('year', ''),
+                        row.get('team', ''), row.get('event_name', ''), row.get('event_gender', ''),
+                        row.get('event_distance', 0), row.get('finals_time', ''), row.get('finals_seconds'),
+                        row.get('points'), row.get('time_standard', ''),
+                        1 if row.get('is_relay') else 0, 0,  # is_diving always 0 now
+                        1 if row.get('is_exhibition') else 0, 1 if row.get('is_dq') else 0,
+                        1 if row.get('is_scratch') else 0, row.get('dq_reason', ''),
+                        json.dumps(row.get('splits', [])), json.dumps(row.get('relay_swimmers', []))
+                    ))
+                    if cursor.rowcount > 0:
+                        loaded_count += 1
+                    else:
+                        skipped_dup += 1
+                except sqlite3.IntegrityError:
+                    skipped_dup += 1
 
             conn.commit()
             conn.close()
@@ -1425,7 +1639,10 @@ class MeetResultsApp(QMainWindow):
                     break
 
             self.load_meet_results()
-            self.status_bar.showMessage(f"Loaded {loaded_count} results from {Path(filepath).name}")
+            msg = f"Loaded {loaded_count} results from {Path(filepath).name}"
+            if skipped_dup > 0:
+                msg += f" ({skipped_dup} duplicates skipped)"
+            self.status_bar.showMessage(msg)
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load PDF:\n{str(e)}")
@@ -1486,9 +1703,9 @@ class MeetResultsApp(QMainWindow):
 
         # Populate event filter - strip gender prefix to avoid duplicates
         cursor.execute('''
-            SELECT DISTINCT r.event_name, r.event_distance FROM saved_results s
+            SELECT DISTINCT r.event_name, r.event_distance, r.is_relay FROM saved_results s
             JOIN results r ON s.result_id = r.id
-            ORDER BY r.event_distance, r.event_name
+            ORDER BY r.is_relay, r.event_distance, r.event_name
         ''')
         events_set = set()
         for row in cursor.fetchall():
@@ -1655,9 +1872,8 @@ class MeetResultsApp(QMainWindow):
 
         # Check if it's a relay with swimmer data
         if result['is_relay'] and result['relay_swimmers']:
-            dialog = RelayDetailsDialog(self, result, DB_PATH)
+            dialog = RelayDetailsDialog(self, result, DB_PATH, read_only=True)
             dialog.exec()
-            self.update_saved_count()
         else:
             self.show_swim_details(result)
 
