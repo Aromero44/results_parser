@@ -139,11 +139,60 @@ Double-click **`HY-TEK Results.bat`** in the app folder.
 
 ## Using the App
 
-1. Click **Load PDF** and select a HY-TEK meet results PDF
-2. Browse results in the **Meet Results** tab - use the filters at the top to narrow down by team, event, stroke, etc.
-3. Select results by clicking the checkboxes, then click **Save Selected** to add them to your saved collection
-4. Switch to the **Saved Results** tab to see everything you've saved across all meets
-5. The **Best Relay** tab automatically computes optimal relay lineups from your saved results
+### Step 1: Load Your Meet Results
+
+The app reads HY-TEK Meet Manager results PDFs. You'll want to load each meet one at a time:
+
+1. Click **Load PDF** and select a meet results PDF
+2. The app will parse the PDF and show every result from that meet in the **Meet Results** tab
+3. You'll see results from all teams — this is normal
+
+### Step 2: Filter and Save Your Team's Results
+
+After loading a meet, you'll usually just want your own team's results:
+
+1. Use the **Team** dropdown at the top to filter to your team
+2. You can also filter by **Gender**, **Stroke**, or **Event** to narrow things down further
+3. Click **Select All Visible** to check every result currently shown
+4. Click **Save Selected** to copy those results to your saved collection
+
+You can also double-click any relay to see individual leg splits, and save specific legs from there.
+
+### Step 3: Repeat for Each Meet
+
+1. Click **Load PDF** again and select your next meet PDF
+2. Filter to your team, select all visible, and save — same as before
+3. Repeat until you've loaded all the meets you want
+
+Each saved result is an independent copy — it includes the meet name and date so you know where it came from. You can delete a loaded meet from the app at any time without losing your saved results.
+
+### Step 4: View Your Saved Results
+
+Switch to the **Saved Results** tab to see everything you've saved across all meets. Each row shows the swimmer's name, year, team, event, time, which meet it came from, and the date. You can:
+
+- Filter by team, event, or gender
+- Remove results you no longer want
+- Export to CSV for use in spreadsheets
+
+### Step 5: Best Relay Calculator
+
+The **Best Relay** tab automatically computes your fastest possible relay lineups using your saved results. It calculates five relays for both Women and Men:
+
+- **200 Freestyle Relay** (4 x 50 Free)
+- **400 Freestyle Relay** (4 x 100 Free)
+- **800 Freestyle Relay** (4 x 200 Free)
+- **200 Medley Relay** (4 x 50 — Back, Breast, Fly, Free)
+- **400 Medley Relay** (4 x 100 — Back, Breast, Fly, Free)
+
+You can filter by team and date range to narrow the calculation.
+
+**How the relay calculator works:**
+
+- It pulls each swimmer's best time for the relevant distance and stroke from your saved results
+- It considers three time sources: **individual event times**, **lead-off relay splits**, and **first-50 splits** from 100-yard individual or lead-off events (for 50-yard relay legs)
+- The **lead-off leg** of each relay can only use leadoff-eligible times (individual swims or lead-off relay splits — not mid-relay splits, since those have the benefit of a flying start)
+- For **medley relays**, it searches across the top candidates for each stroke to find the four-swimmer combination with the lowest total time, correctly handling swimmers who are fast in multiple strokes
+- For **freestyle relays**, it picks the fastest leadoff-eligible swimmer first, then the next three fastest
 
 ---
 

@@ -730,8 +730,8 @@ class MeetResultsApp(QMainWindow):
 
         # Saved results table - removed Place and Points columns
         self.saved_table = QTableWidget()
-        self.saved_table.setColumnCount(5)
-        self.saved_table.setHorizontalHeaderLabels(['Name', 'Year', 'Team', 'Event', 'Time'])
+        self.saved_table.setColumnCount(7)
+        self.saved_table.setHorizontalHeaderLabels(['Name', 'Year', 'Team', 'Event', 'Time', 'Meet', 'Date'])
         # Use Interactive mode for all columns, stretch last section to fill
         self.saved_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.saved_table.horizontalHeader().setStretchLastSection(True)
@@ -740,10 +740,12 @@ class MeetResultsApp(QMainWindow):
         self.saved_table.cellDoubleClicked.connect(self.on_saved_double_clicked)
 
         # Set default column widths
-        self.saved_table.setColumnWidth(0, 180)  # Name
-        self.saved_table.setColumnWidth(1, 50)   # Year
+        self.saved_table.setColumnWidth(0, 150)  # Name
+        self.saved_table.setColumnWidth(1, 40)   # Year
         self.saved_table.setColumnWidth(2, 80)   # Team
-        self.saved_table.setColumnWidth(3, 200)  # Event
+        self.saved_table.setColumnWidth(3, 160)  # Event
+        self.saved_table.setColumnWidth(4, 70)   # Time
+        self.saved_table.setColumnWidth(5, 150)  # Meet
 
         layout.addWidget(self.saved_table)
 
@@ -1987,6 +1989,8 @@ class MeetResultsApp(QMainWindow):
             self.saved_table.setItem(i, 2, QTableWidgetItem(row['team'] or ''))
             self.saved_table.setItem(i, 3, QTableWidgetItem(row['event_name'] or ''))
             self.saved_table.setItem(i, 4, QTableWidgetItem(row['finals_time'] or ''))
+            self.saved_table.setItem(i, 5, QTableWidgetItem(row['meet_name'] or ''))
+            self.saved_table.setItem(i, 6, QTableWidgetItem(row['meet_date'] or ''))
 
         self.saved_count_label.setText(f"{len(rows)} saved results")
 
@@ -2197,10 +2201,10 @@ class MeetResultsApp(QMainWindow):
         if filepath:
             with open(filepath, 'w', newline='') as f:
                 writer = csv.writer(f)
-                writer.writerow(['Name', 'Year', 'Team', 'Event', 'Time'])
+                writer.writerow(['Name', 'Year', 'Team', 'Event', 'Time', 'Meet', 'Date'])
                 for i in range(self.saved_table.rowCount()):
                     row = []
-                    for j in range(5):  # 5 columns: Name, Year, Team, Event, Time
+                    for j in range(7):  # 7 columns: Name, Year, Team, Event, Time, Meet, Date
                         item = self.saved_table.item(i, j)
                         row.append(item.text() if item else '')
                     writer.writerow(row)
