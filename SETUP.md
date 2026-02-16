@@ -42,32 +42,26 @@ This creates a `results_parser` folder in your current location. If you don't kn
 
 ### Step 3: Install the Required Libraries
 
-1. Open **Terminal** (search for "Terminal" in Spotlight, or find it in Applications > Utilities)
-2. Copy and paste this entire line, then press Enter:
+1. Open **Finder** and find the app folder you downloaded
+2. Right-click the folder and choose **"New Terminal at Folder"**. A Terminal window will open already in the right location.
+3. Copy and paste this line, then press Enter:
 
 ```
-pip3 install pdfplumber pandas PySide6
+pip3 install -r requirements.txt
 ```
 
-3. Wait for it to finish (you'll see text scrolling by). When you see your username again with a `$` or `%` at the end, it's done.
+4. Wait for it to finish (you'll see text scrolling by). When you see your username again with a `$` or `%` at the end, it's done.
 
-> If you get an error about "pip3 not found", try `python3 -m pip install pdfplumber pandas PySide6` instead.
+> If you get an error about "pip3 not found", try `python3 -m pip install -r requirements.txt` instead.
+>
+> If you don't see "New Terminal at Folder" when you right-click, go to **System Settings > Keyboard > Keyboard Shortcuts > Services** and enable it under **Files and Folders**.
 
 ### Step 4: Run the App
 
-**Option A** - Double-click the file called **`HY-TEK Results.command`** in this folder.
+Double-click the file called **`HY-TEK Results.command`** in the app folder.
 
 - The first time, Mac may say "cannot be opened because it is from an unidentified developer."
-- If that happens: right-click the file, choose **Open**, then click **Open** in the popup.
-
-**Option B** - In Terminal, paste this and press Enter:
-
-```
-cd path/to/this/folder
-python3 gui.py
-```
-
-Replace `path/to/this/folder` with the actual location. Tip: type `cd ` (with a space after it), then drag the folder from Finder into the Terminal window - it will fill in the path for you.
+- If that happens: right-click the file, choose **Open**, then click **Open** in the popup. You only have to do this once.
 
 ---
 
@@ -82,57 +76,51 @@ Replace `path/to/this/folder` with the actual location. Tip: type `cd ` (with a 
 
 ### Step 3: Install the Required Libraries
 
-1. Open **Command Prompt** (search for "cmd" in the Start menu)
-2. Copy and paste this line, then press Enter:
+1. Open **File Explorer** and find the app folder you downloaded
+2. Click on the **address bar** at the top (where it shows the folder path), type `cmd`, and press **Enter**. A Command Prompt window will open already in the right location.
+3. Copy and paste this line, then press Enter:
 
 ```
-pip install pdfplumber pandas PySide6
+pip install -r requirements.txt
 ```
 
-3. Wait for it to finish. When you see `C:\Users\...>` again, it's done.
+4. Wait for it to finish. When you see `C:\Users\...>` again, it's done.
 
-> If you get an error about "pip not found", close Command Prompt and reopen it (the PATH needs to refresh). If it still doesn't work, try `python -m pip install pdfplumber pandas PySide6`.
+> If you get an error about "pip not found", close Command Prompt and reopen it (the PATH needs to refresh). If it still doesn't work, try `python -m pip install -r requirements.txt`.
 
 ### Step 4: Run the App
 
-**Option A** - Double-click the file called **`HY-TEK Results.bat`** in this folder.
+Double-click **`HY-TEK Results.bat`** in the app folder. A terminal window will flash briefly and the app will open.
 
-**Option B** - Double-click **`HY-TEK Results.pyw`** (this runs without a black terminal window).
+> **Can't see the .bat file?** Windows hides file extensions by default. You may see multiple files just called "HY-TEK Results" — look for the one with a gear/window icon, or turn on extensions: open File Explorer, click **View** at the top, and check **File name extensions** (Windows 10) or click **View > Show > File name extensions** (Windows 11).
 
 ---
 
 ## Adding to Applications / Creating a Shortcut
 
-### Mac - Add to Dock or Applications
+### Mac
 
 **Add to Dock (quickest):**
 
-1. Open Finder and navigate to this folder
-2. Drag the **`HY-TEK Results.command`** file onto your **Dock** (the bar of icons at the bottom of your screen), dropping it on the right side near the Trash
+1. Open Finder and navigate to the app folder
+2. Drag **`HY-TEK Results.command`** onto your **Dock** (the bar of icons at the bottom of your screen), dropping it on the right side near the Trash
 3. Now you can click it from the Dock anytime to launch the app
-
-**Add to Launchpad / Applications:**
-
-1. Open Finder and navigate to this folder
-2. Hold the **Option** key and drag the **`HY-TEK Results.command`** file into your **Applications** folder (in the Finder sidebar on the left). Holding Option creates a copy so the original stays in place.
-3. It will now show up when you search in **Spotlight** (Cmd + Space) or in **Launchpad**
 
 **Create a Desktop shortcut:**
 
-1. Open Finder and navigate to this folder
-2. Right-click **`HY-TEK Results.command`** and choose **Make Alias**
-3. Drag the new alias file (it will have "alias" in the name) to your **Desktop**
-4. You can rename it to just "HY-TEK Results" by clicking the name once, waiting, then clicking again to edit
+1. Open Finder and navigate to the app folder
+2. Hold **Option + Command** and drag **`HY-TEK Results.command`** to your **Desktop**. This creates a shortcut (alias) while keeping the original in place.
+3. You can rename it by clicking the name, waiting a moment, then clicking again to edit
 
-### Windows - Create a Desktop Shortcut / Pin to Taskbar
+### Windows
 
 **Desktop shortcut:**
 
-1. Open File Explorer and navigate to this folder
+1. Open File Explorer and navigate to the app folder
 2. Right-click **`HY-TEK Results.bat`** (or **`HY-TEK Results.pyw`**)
 3. Select **Show more options** (Windows 11) or go directly to the next step (Windows 10)
 4. Click **Send to** > **Desktop (create shortcut)**
-5. A shortcut will appear on your Desktop - you can rename it by right-clicking and choosing **Rename**
+5. You can rename the shortcut by right-clicking it and choosing **Rename**
 
 **Pin to Taskbar:**
 
@@ -143,7 +131,7 @@ pip install pdfplumber pandas PySide6
 
 **Pin to Start Menu:**
 
-1. Open File Explorer and navigate to this folder
+1. Open File Explorer and navigate to the app folder
 2. Right-click **`HY-TEK Results.bat`**
 3. Click **Pin to Start** (Windows 10) or **Show more options** > **Pin to Start** (Windows 11)
 
@@ -164,6 +152,6 @@ pip install pdfplumber pandas PySide6
 | Problem | Solution |
 |---------|----------|
 | "Python not found" | Reinstall Python and make sure "Add to PATH" is checked (Windows) |
-| "No module named PySide6" | Run the pip install command from Step 2 again |
+| "No module named PySide6" | Run the pip install command from Step 3 again |
 | App opens but window is blank | Try resizing the window, or close and reopen |
 | PDF won't load | Make sure it's a HY-TEK Meet Manager results PDF (not a start list or psych sheet) |
