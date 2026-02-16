@@ -90,9 +90,9 @@ pip install -r requirements.txt
 
 ### Step 4: Run the App
 
-Double-click **`HY-TEK Results.pyw`** in the app folder. The app will open directly with no terminal window.
+Double-click **`HY-TEK Results.vbs`** in the app folder. The app will open with no terminal window.
 
-> **Can't find the right file?** Windows hides file extensions by default, so you may see several files called "HY-TEK Results". To turn on extensions: open File Explorer, click **View** at the top, and check **File name extensions** (Windows 10) or click **View > Show > File name extensions** (Windows 11). Look for the one ending in `.pyw`.
+> **Can't find the right file?** Windows hides file extensions by default, so you may see several files called "HY-TEK Results". To turn on extensions: open File Explorer, click **View** at the top, and check **File name extensions** (Windows 10) or click **View > Show > File name extensions** (Windows 11). Look for the one ending in `.vbs`.
 
 ---
 
@@ -117,7 +117,7 @@ Double-click **`HY-TEK Results.pyw`** in the app folder. The app will open direc
 **Desktop shortcut:**
 
 1. Open File Explorer and navigate to the app folder
-2. Right-click **`HY-TEK Results.pyw`**
+2. Right-click **`HY-TEK Results.vbs`**
 3. Select **Show more options** (Windows 11) or go directly to the next step (Windows 10)
 4. Click **Send to** > **Desktop (create shortcut)**
 5. You can rename the shortcut by right-clicking it and choosing **Rename**
@@ -132,7 +132,7 @@ Double-click **`HY-TEK Results.pyw`** in the app folder. The app will open direc
 **Pin to Start Menu:**
 
 1. Open File Explorer and navigate to the app folder
-2. Right-click **`HY-TEK Results.pyw`**
+2. Right-click **`HY-TEK Results.vbs`**
 3. Click **Pin to Start** (Windows 10) or **Show more options** > **Pin to Start** (Windows 11)
 
 ---
