@@ -19,6 +19,7 @@ class RelaySwimmer:
     name: str
     year: Optional[str]
     leg: int  # 1-4
+    reaction_time: Optional[float] = None
 
 
 @dataclass
@@ -42,6 +43,8 @@ class SwimResult:
     is_exhibition: bool
     is_dq: bool
     is_scratch: bool
+    round: Optional[str] = None
+    reaction_time: Optional[float] = None
     dq_reason: Optional[str] = None
     splits: list = field(default_factory=list)
     relay_swimmers: List[RelaySwimmer] = field(default_factory=list)
@@ -254,6 +257,16 @@ def parse_event_header(line: str) -> Optional[dict]:
         stroke_part = match.group(4).strip()
         is_relay = 'Relay' in stroke_part
         stroke = stroke_part.replace(' Relay', '').strip()
+
+        # Detect and strip Time Trial / Swim-off suffixes
+        event_round = None
+        if 'Time Trial' in stroke:
+            stroke = stroke.replace(' Time Trial', '').strip()
+            event_round = 'Time Trial'
+        elif 'Swim-off' in stroke or 'Swim-Off' in stroke:
+            stroke = re.sub(r'\s*Swim-[Oo]ff', '', stroke).strip()
+            event_round = 'Swim-off'
+
         # Normalise stroke names
         if stroke in ('Free', 'Freestyle'):
             stroke = 'Freestyle'
@@ -273,6 +286,7 @@ def parse_event_header(line: str) -> Optional[dict]:
             'event_stroke': stroke,
             'is_relay': is_relay,
             'is_diving': False,
+            'event_round': event_round,
             'event_name': f"{gender} {distance} {stroke}" + (" Relay" if is_relay else "")
         }
 
@@ -312,6 +326,26 @@ def parse_event_header(line: str) -> Optional[dict]:
 
 _CONT_EVENT_RE = re.compile(r'^\((?:#|Event\s+)(\d+)\s+(Women|Men)')
 
+# ---------------------------------------------------------------------------
+# Round / section header detection
+# ---------------------------------------------------------------------------
+
+_ROUND_PATTERNS = [
+    (re.compile(r'^[ABC]\s*-\s*Final', re.IGNORECASE), 'Finals'),
+    (re.compile(r'^Prelim', re.IGNORECASE), 'Prelim'),
+    (re.compile(r'^Consolation', re.IGNORECASE), 'Finals'),
+    (re.compile(r'^Timed\s+Finals', re.IGNORECASE), 'Finals'),
+]
+
+
+def detect_round(line: str) -> Optional[str]:
+    """Check if line is a round/section header. Returns round name or None."""
+    line = line.strip()
+    for pat, round_name in _ROUND_PATTERNS:
+        if pat.match(line):
+            return round_name
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Header / skip-line detection
@@ -330,14 +364,9 @@ _SKIP_PATTERNS = [
         r'^Name\s+(?:Y\s*r|Age)',
         r'Scores\s*-',
         r'Team Rankings',
-        r'South Carolina',
-        r'Georgia Institute',
-        r'^A\s*-\s*Final',
-        r'^B\s*-\s*Final',
-        r'^C\s*-\s*Final',
-        r'^Prelim',
-        r'^Consolation',
-        r'^Timed Finals',
+        r'^South Carolina',
+        r'^Georgia Institute',
+        # Section headers (A-Final, Prelim, etc.) handled as round markers in parse_text_block
         r'^Seed\s+Time',
         r'^Finals\s+Time',
         r'^\s*\d{4}\s+GT\s+The',    # meet title line
@@ -345,8 +374,7 @@ _SKIP_PATTERNS = [
         r'^Saturday\s+Round',
         r'UGA\s+Fall\s+Invitational',
         r'Ramsey\s+Center',
-        r'McAuley',
-        r'^\*',                       # tied-place marker line
+        r'^McAuley',
     ]
 ]
 
@@ -390,27 +418,78 @@ def is_dq_reason_line(line: str) -> bool:
 # Split parsing
 # ---------------------------------------------------------------------------
 
-def parse_splits(line: str) -> list:
-    """Parse split times from a line.
+def parse_splits(line: str) -> Tuple[list, Optional[float]]:
+    """Parse split times and reaction time from a line.
 
-    Handles:
-      25.90 28.26                          (plain splits)
-      r:+0.72 22.14 22.19 21.59 22.36     (reaction prefix + splits)
-      25.90 54.16 (28.26) 1:22.53 (28.37)  (cumulative with (diff) notation)
+    Returns (splits, reaction_time).
+
+    When parenthesized diff values are present (e.g. HY-TEK relay format),
+    returns the actual split/diff times: bare values NOT followed by a paren
+    plus all parenthesized values.  This avoids reliance on cumulative values
+    which can be dropped by PDF text extraction.
+
+    Without parens, returns bare values as-is.
     """
-    # Strip reaction time prefix
-    line = re.sub(r'^r:[+\-]?\d+\.\d+\s*', '', line.strip())
+    line = line.strip()
+
+    # Extract reaction time prefix
+    reaction_time = None
+    r_match = re.match(r'^r:([+\-]?\d+\.?\d*)\s*', line)
+    if r_match:
+        try:
+            reaction_time = float(r_match.group(1))
+        except ValueError:
+            pass
+        line = line[r_match.end():]
+
+    # Tokenize into bare and paren values, preserving order
+    tokens = []  # list of ('bare'|'paren', raw_string)
+    pos = 0
+    while pos < len(line):
+        while pos < len(line) and line[pos].isspace():
+            pos += 1
+        if pos >= len(line):
+            break
+        if line[pos] == '(':
+            end = line.find(')', pos)
+            if end == -1:
+                break
+            tokens.append(('paren', line[pos + 1:end]))
+            pos = end + 1
+        else:
+            end = pos
+            while end < len(line) and not line[end].isspace() and line[end] != '(':
+                end += 1
+            tokens.append(('bare', line[pos:end]))
+            pos = end
+
+    has_parens = any(k == 'paren' for k, _ in tokens)
 
     splits = []
-    # Remove parenthesized diff times -- we want the cumulative values
-    cleaned = re.sub(r'\([^)]+\)', '', line)
+    if has_parens:
+        # Prefer diff/split values: include parenthesized times and bare
+        # values NOT followed by ANY paren (even empty ones).
+        # A bare value followed by a paren is always a cumulative value.
+        for i, (kind, value) in enumerate(tokens):
+            if kind == 'paren':
+                secs = time_to_seconds(value)
+                if secs is not None and 10 <= secs <= 1200:
+                    splits.append(secs)
+            else:  # bare
+                secs = time_to_seconds(value)
+                if secs is not None and 10 <= secs <= 1200:
+                    # Skip if next token is ANY paren (bare before paren = cumulative)
+                    next_is_paren = (i + 1 < len(tokens) and tokens[i + 1][0] == 'paren')
+                    if not next_is_paren:
+                        splits.append(secs)
+    else:
+        # No parenthesized values — return bare values as-is
+        for _, value in tokens:
+            secs = time_to_seconds(value)
+            if secs is not None and 10 <= secs <= 1200:
+                splits.append(secs)
 
-    for part in cleaned.split():
-        secs = time_to_seconds(part)
-        if secs is not None and 10 <= secs <= 1200:
-            splits.append(secs)
-
-    return splits
+    return splits, reaction_time
 
 
 def is_split_line(line: str) -> bool:
@@ -419,12 +498,18 @@ def is_split_line(line: str) -> bool:
     if not line:
         return False
 
+    # Lines starting with a place number + space + letter are result lines, not splits
+    # e.g. "11 University of Florida C 3:13.00 3:12.29 14"
+    # Also handle * tie indicator prefix: "*37 Gerhard, Ben ..."
+    if re.match(r'^\*?(\d+|---)\s+[A-Za-z]', line):
+        return False
+
     # Starts with reaction time -> likely a split line
-    if re.match(r'^r:[+\-]?\d+\.\d+', line):
+    if re.match(r'^r:[+\-]?\d+\.?\d*', line):
         return True
 
     # Strip reaction prefix for further checks
-    cleaned = re.sub(r'^r:[+\-]?\d+\.\d+\s*', '', line)
+    cleaned = re.sub(r'^r:[+\-]?\d+\.?\d*\s*', '', line)
     # Remove parenthesized diffs
     cleaned = re.sub(r'\([^)]+\)', '', cleaned).strip()
 
@@ -443,26 +528,58 @@ def is_split_line(line: str) -> bool:
 # Relay swimmer parsing
 # ---------------------------------------------------------------------------
 
-def parse_relay_swimmers(line: str) -> List[Tuple[str, Optional[str], Optional[int]]]:
-    """Parse relay swimmer line into list of (name, year_or_age, leg_number).
+def parse_relay_swimmers(line: str) -> List[Tuple[str, Optional[str], Optional[int], Optional[float]]]:
+    """Parse relay swimmer line into list of (name, year_or_age, leg_number, reaction_time).
 
     Handles:
       Rothwell, Vivien E JR Deedy, Anne SR
       1) Stanisavljevic, Nina SO 2) Reis, Giovana SO
       1) Jones, Emily 22 2) r:0.22 Scott, Jada 20
-      1) Moses, Cassie A SR 2) r:0.29 Christianson, Lily SO
+      1) Sikes, Katie Belle B 20 2) r:0.28 Headland, Charlotte 19
+      1) Jones, Emily 22 2) r:0.22 Scott, Jada 20 3) r:0.41 Van Brunt, Gaby 20
+      1) Paradis, Mazie 18 2) r:0.25 Blackhurst, Sydney 20 3) r:0.17 Chavez-Varela, Isabella 184) r:0.04 Parker, Sarah 18
     """
     swimmers = []
 
-    # Check for numbered format: 1) Name Year/Age 2) ...
-    numbered = re.findall(
-        r'(\d)\)\s*(?:r:[+\-]?\d+\.\d+\s+)?([A-Za-z\'\-]+,\s*[A-Za-z]+(?:\s+[A-Z])?)\s+(\d{2}|FR|SO|JR|SR|GS)',
-        line
-    )
-    if numbered:
-        for leg_str, name, year_age in numbered:
-            swimmers.append((name.strip(), year_age, int(leg_str)))
-        return swimmers
+    # Fix merged age+leg: "184)" → "18 4)", "204)" → "20 4)"
+    line = re.sub(r'(\d{2})(\d\))', r'\1 \2', line)
+
+    # Check for numbered format: split by leg markers
+    if re.search(r'\d\)', line):
+        # Split into segments by leg markers: 1) ... 2) ... 3) ... 4) ...
+        parts = re.split(r'(\d)\)', line)
+        # parts = ['', '1', ' content1 ', '2', ' content2 ', ...]
+        i = 1
+        while i < len(parts) - 1:
+            leg_num = int(parts[i])
+            content = parts[i + 1].strip()
+
+            # Extract reaction time prefix
+            reaction = None
+            r_match = re.match(r'r:[+\-]?\d+\.?\d*\s*', content)
+            if r_match:
+                rt_str = r_match.group(0).strip()
+                # Parse numeric value: "r:0.22" -> 0.22, "r:+0.54" -> 0.54, "r:-0.39" -> -0.39
+                rt_val = re.search(r'[+\-]?\d+\.?\d*', rt_str)
+                if rt_val:
+                    try:
+                        reaction = float(rt_val.group(0))
+                    except ValueError:
+                        pass
+                content = content[r_match.end():].strip()
+
+            # Parse name and age/year from remaining content
+            # Name: everything up to the last age/year token
+            m = re.match(r'^(.+?)\s+(\d{2}|FR|SO|JR|SR|GS)\s*$', content)
+            if m:
+                name = m.group(1).strip()
+                year_age = m.group(2)
+                if ',' in name:
+                    swimmers.append((name, year_age, leg_num, reaction))
+
+            i += 2
+        if swimmers:
+            return swimmers
 
     # Fallback: un-numbered format — "Name, First [M] YR Name, First YR"
     pattern = r'([A-Za-z\'\-]+,\s*[A-Za-z]+(?:\s+[A-Z])?)\s+(FR|SO|JR|SR|GS|\d{2})'
@@ -470,7 +587,7 @@ def parse_relay_swimmers(line: str) -> List[Tuple[str, Optional[str], Optional[i
     for name, year in matches:
         name = name.strip()
         if ',' in name:
-            swimmers.append((name, year, None))  # leg assigned by caller
+            swimmers.append((name, year, None, None))
 
     return swimmers
 
@@ -478,8 +595,8 @@ def parse_relay_swimmers(line: str) -> List[Tuple[str, Optional[str], Optional[i
 def is_relay_swimmer_line(line: str) -> bool:
     """Check if line contains relay swimmer names."""
     line = line.strip()
-    # Numbered format
-    if re.search(r'^\d\)\s*(?:r:[+\-]?\d+\.\d+\s+)?[A-Za-z\'\-]+,', line):
+    # Numbered format: "1) Name," or "1) r:0.XX Name,"
+    if re.search(r'^\d\)\s*(?:r:[+\-]?\d+\.?\d*\s+)?[A-Za-z\'\-]+', line) and ',' in line:
         return True
     # Un-numbered: two names with years
     if re.search(r'[A-Za-z\'\-]+,\s+[A-Za-z]+.*?(FR|SO|JR|SR)\s+[A-Za-z\'\-]+,', line):
@@ -506,10 +623,17 @@ def parse_individual_result(line: str, event_info: dict, fmt: str) -> Optional[S
     Invitational format:
       1 Dobson, Kennedi F 18 Georgia, University of 9:29.94 15:47.61 20
       14 Matheson, Thomas Z 18 Florida State University 9:20.21 15:16.40 3
+      *37 Gerhard, Ben M 22 Georgia Institute of Technolog 46.53 45.47
     """
     line = line.strip()
     if not line:
         return None
+
+    # Strip leading * (tie indicator) before parsing
+    line = line.lstrip('*')
+
+    # Fix split decimal points from PDF extraction: "2. 50" -> "2.50"
+    line = re.sub(r'(\d+)\.\s+(\d+)\s*$', r'\1.\2', line)
 
     result = None
 
@@ -699,7 +823,7 @@ def _parse_individual_invitational(line: str, event_info: dict) -> Optional[Swim
     place = int(place_str) if place_str != '---' else None
     is_exhibition = finals.startswith('x') or finals.startswith('X')
     finals_clean = finals.lstrip('xXJ')
-    is_scratch = finals_clean in ('SCR', 'DFS')
+    is_scratch = finals_clean in ('SCR', 'DFS', 'NS')
     is_dq = finals_clean in ('DQ',)
 
     # Clean up school name (may have trailing spaces or truncation)
@@ -925,6 +1049,9 @@ def parse_relay_result(line: str, event_info: dict, fmt: str) -> Optional[SwimRe
     if not line:
         return None
 
+    # Strip leading * (tie indicator)
+    line = line.lstrip('*')
+
     result = None
     if fmt == '1col':
         result = _parse_relay_invitational(line, event_info)
@@ -1065,10 +1192,14 @@ def parse_diving_result(line: str, event_info: dict) -> Optional[SwimResult]:
 # ---------------------------------------------------------------------------
 
 def parse_text_block(text: str, event_map: dict, last_event: Optional[dict],
-                     fmt: str) -> Tuple[List[SwimResult], Optional[dict]]:
-    """Parse a block of text (one column) into results."""
+                     fmt: str, last_round: Optional[str] = None) -> Tuple[List[SwimResult], Optional[dict], Optional[str]]:
+    """Parse a block of text (one column) into results.
+
+    Returns (results, last_event, last_round).
+    """
     results = []
     current_event = last_event
+    current_round = last_round
     current_result = None
     pending_relay_swimmers = []
     relay_leg = 1
@@ -1076,6 +1207,12 @@ def parse_text_block(text: str, event_map: dict, last_event: Optional[dict],
     for line in text.split('\n'):
         line = line.strip()
         if not line:
+            continue
+
+        # Round/section header (A-Final, Prelim, etc.)
+        round_name = detect_round(line)
+        if round_name:
+            current_round = round_name
             continue
 
         if is_header_line(line):
@@ -1106,6 +1243,7 @@ def parse_text_block(text: str, event_map: dict, last_event: Optional[dict],
             pending_relay_swimmers = []
             relay_leg = 1
             current_event = event_info
+            current_round = event_info.get('event_round')  # Time Trial / Swim-off from header, or None
             event_map[event_info['event_number']] = event_info
             continue
 
@@ -1119,15 +1257,19 @@ def parse_text_block(text: str, event_map: dict, last_event: Optional[dict],
         # Split line
         if is_split_line(line):
             if current_result:
-                current_result.splits.extend(parse_splits(line))
+                splits, reaction = parse_splits(line)
+                current_result.splits.extend(splits)
+                if reaction is not None and current_result.reaction_time is None:
+                    current_result.reaction_time = reaction
             continue
 
         # Relay swimmer line (must not start with a place number for non-numbered format)
         if current_event['is_relay'] and is_relay_swimmer_line(line) and not re.match(r'^\d+\s+[A-Z]', line):
             swimmers = parse_relay_swimmers(line)
-            for name, year_age, leg_num in swimmers:
+            for name, year_age, leg_num, reaction in swimmers:
                 actual_leg = leg_num if leg_num else relay_leg
-                pending_relay_swimmers.append(RelaySwimmer(name=name, year=year_age, leg=actual_leg))
+                pending_relay_swimmers.append(RelaySwimmer(
+                    name=name, year=year_age, leg=actual_leg, reaction_time=reaction))
                 if leg_num is None:
                     relay_leg += 1
                 else:
@@ -1146,12 +1288,13 @@ def parse_text_block(text: str, event_map: dict, last_event: Optional[dict],
             result = parse_individual_result(line, current_event, fmt)
 
         if result:
+            result.round = current_round
             if current_result and not current_event['is_relay']:
                 results.append(current_result)
             current_result = result
 
     _flush(results, current_result, pending_relay_swimmers)
-    return results, current_event
+    return results, current_event, current_round
 
 
 def _flush(results, current_result, pending_swimmers):
@@ -1261,10 +1404,12 @@ def parse_hytek_pdf(pdf_path: str, include_meet_info: bool = False):
         # Second pass: parse results
         all_results = []
         last_event = None
+        last_round = None
 
         for page in pdf.pages:
             for col_text in extract_columns(page, fmt, splits):
-                results, last_event = parse_text_block(col_text, event_map, last_event, fmt)
+                results, last_event, last_round = parse_text_block(
+                    col_text, event_map, last_event, fmt, last_round)
                 all_results.extend(results)
 
     if not all_results:
@@ -1290,10 +1435,21 @@ def parse_hytek_pdf(pdf_path: str, include_meet_info: bool = False):
         'is_exhibition': r.is_exhibition,
         'is_dq': r.is_dq,
         'is_scratch': r.is_scratch,
+        'round': r.round,
+        'reaction_time': r.reaction_time,
         'dq_reason': r.dq_reason,
         'splits': r.splits,
-        'relay_swimmers': [(s.name, s.year, s.leg) for s in r.relay_swimmers] if r.relay_swimmers else [],
+        'relay_swimmers': [(s.name, s.year, s.leg, s.reaction_time) for s in r.relay_swimmers] if r.relay_swimmers else [],
     } for r in all_results])
+
+    df = df.drop_duplicates(subset=['name', 'event_name', 'finals_time', 'round'], keep='first')
+
+    # Fix known PDF truncations in team names
+    _TEAM_FIXES = {
+        'Georgia Institute of Technolog': 'Georgia Institute of Technology',
+    }
+    if 'team' in df.columns:
+        df['team'] = df['team'].replace(_TEAM_FIXES)
 
     df = df.sort_values(['event_number', 'place']).reset_index(drop=True)
 
@@ -1316,7 +1472,7 @@ def get_team_results(df, team): return df[df['team'].str.contains(team, case=Fal
 def summarize_meet(df):
     return {
         'total_results': len(df),
-        'events': df['event_number'].nunique(),
+        'events': df['event_name'].nunique(),
         'teams': df['team'].nunique(),
         'individual_results': len(get_individual_results(df)),
         'relay_results': len(get_relay_results(df)),

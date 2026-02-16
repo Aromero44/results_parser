@@ -91,7 +91,7 @@ class RelayDetailsDialog(QDialog):
 
             self.table.setRowCount(len(relay_swimmers))
             for i, swimmer in enumerate(relay_swimmers):
-                name, year, leg = swimmer
+                name, year, leg = swimmer[0], swimmer[1], swimmer[2]
                 leg_time = self.format_time(self.leg_times[i]) if i < len(self.leg_times) and self.leg_times[i] else ""
                 self.table.setItem(i, 0, QTableWidgetItem(str(leg)))
                 self.table.setItem(i, 1, QTableWidgetItem(name))
@@ -111,7 +111,7 @@ class RelayDetailsDialog(QDialog):
 
             self.table.setRowCount(len(relay_swimmers))
             for i, swimmer in enumerate(relay_swimmers):
-                name, year, leg = swimmer
+                name, year, leg = swimmer[0], swimmer[1], swimmer[2]
                 leg_time = self.format_time(self.leg_times[i]) if i < len(self.leg_times) and self.leg_times[i] else ""
                 checkbox_item = QTableWidgetItem()
                 checkbox_item.setCheckState(Qt.Unchecked)
@@ -162,36 +162,46 @@ class RelayDetailsDialog(QDialog):
 
     def calculate_leg_times(self, splits, num_swimmers, event_distance):
         """
-        Calculate individual leg times from splits.
+        Calculate individual leg times from relay splits.
 
-        For 200 relays (4x50): splits are already individual leg times [leg1, leg2, leg3, leg4]
-        For 400/800 relays (4x100, 4x200): splits are 50 split, 100 cumulative per swimmer.
-          The last value in each swimmer's group is their total leg time.
+        Splits may be diff-based (from parenthesized values) or cumulative.
+        Auto-detects format: if monotonically increasing → cumulative,
+        otherwise → diff/split values.
+
+        For diff splits (e.g. 4x100):
+          [22.46, 46.96, 24.65, 53.75, 21.31, 45.85, 20.37, 43.05]
+          Leg times are at every splits_per_leg-th index: indices 1,3,5,7
+          These ARE the leg times directly.
+
+        For cumulative splits:
+          [22.46, 46.96, 71.61, 100.71, 122.02, 146.56, 166.93, 189.61]
+          Leg times = cumulative[end] - cumulative[prev_end].
         """
         if not splits or not num_swimmers:
             return []
 
         leg_distance = event_distance // num_swimmers if num_swimmers else 50
-        splits_per_leg = leg_distance // 50  # How many split values per leg
+        splits_per_leg = leg_distance // 50
+        if splits_per_leg == 0:
+            return []
 
-        # Check if splits are already individual leg times (one per swimmer)
-        if len(splits) == num_swimmers:
-            return list(splits)
+        # Auto-detect: monotonically increasing → cumulative
+        is_cumulative = (len(splits) > 1 and
+                         all(splits[i] <= splits[i + 1] for i in range(len(splits) - 1)))
 
-        # Each swimmer has splits_per_leg values: 50 split, 100 cumulative, etc.
-        # The last value in each group is the cumulative leg time.
         leg_times = []
+        prev_cumulative = 0.0
         for i in range(num_swimmers):
-            start_idx = i * splits_per_leg
-            end_idx = start_idx + splits_per_leg
+            end_idx = (i + 1) * splits_per_leg - 1
 
-            if end_idx <= len(splits):
-                # Last value is the cumulative time for this leg
-                leg_time = splits[end_idx - 1]
-                leg_times.append(leg_time)
-            elif start_idx < len(splits):
-                # Partial data - take the last available split
-                leg_time = splits[-1] if start_idx < len(splits) else None
+            if end_idx < len(splits):
+                if is_cumulative:
+                    cumulative = splits[end_idx]
+                    leg_time = round(cumulative - prev_cumulative, 2)
+                    prev_cumulative = cumulative
+                else:
+                    # Diff splits: value at end_idx IS the leg time
+                    leg_time = round(splits[end_idx], 2)
                 leg_times.append(leg_time)
             else:
                 leg_times.append(None)
@@ -228,11 +238,20 @@ class RelayDetailsDialog(QDialog):
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
+        # Get meet info for the copy
+        cursor.execute('SELECT meet_name, meet_date, filename FROM meets WHERE id = ?',
+                       (self.row_data['meet_id'],))
+        meet = cursor.fetchone()
+        meet_name = meet['meet_name'] if meet else ''
+        meet_date = meet['meet_date'] if meet else ''
+        meet_filename = meet['filename'] if meet else ''
+
         for i in selected:
             if i >= len(self.relay_swimmers):
                 continue
 
-            name, year, leg = self.relay_swimmers[i]
+            s = self.relay_swimmers[i]
+            name, year, leg = s[0], s[1], s[2]
             leg_time = self.leg_times[i] if i < len(self.leg_times) else None
             if not leg_time:
                 continue
@@ -244,26 +263,21 @@ class RelayDetailsDialog(QDialog):
 
             try:
                 cursor.execute('''
-                    INSERT OR IGNORE INTO results (meet_id, place, name, year, team, event_name, event_gender,
-                        event_distance, finals_time, finals_seconds, points, time_standard,
-                        is_relay, is_diving, is_exhibition, is_dq, is_scratch, dq_reason, splits, relay_swimmers)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT OR IGNORE INTO saved_results
+                    (place, name, year, team, event_name, event_gender, event_distance,
+                     finals_time, finals_seconds, points, time_standard,
+                     is_relay, is_diving, is_exhibition, is_dq, is_scratch,
+                     round, reaction_time, dq_reason, splits, relay_swimmers,
+                     meet_name, meet_date, meet_filename)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ''', (
-                    self.row_data['meet_id'], None, name, year, self.row_data['team'], leg_event,
+                    None, name, year, self.row_data['team'], leg_event,
                     self.row_data['event_gender'], 50, time_str, leg_time, None, None,
-                    0, 0, 0, 0, 0, None, '[]', '[]'
+                    0, 0, 0, 0, 0, None, None, None, '[]', '[]',
+                    meet_name, meet_date, meet_filename,
                 ))
                 if cursor.rowcount > 0:
-                    result_id = cursor.lastrowid
-                    cursor.execute('INSERT OR IGNORE INTO saved_results (result_id) VALUES (?)', (result_id,))
                     saved_count += 1
-                else:
-                    # Already exists - find it and ensure it's saved
-                    cursor.execute('''SELECT id FROM results WHERE meet_id = ? AND name = ? AND event_name = ? AND finals_time = ?''',
-                                  (self.row_data['meet_id'], name, leg_event, time_str))
-                    existing = cursor.fetchone()
-                    if existing:
-                        cursor.execute('INSERT OR IGNORE INTO saved_results (result_id) VALUES (?)', (existing['id'],))
             except Exception:
                 pass
 
@@ -335,6 +349,8 @@ class MeetResultsApp(QMainWindow):
                 is_exhibition INTEGER,
                 is_dq INTEGER,
                 is_scratch INTEGER,
+                round TEXT,
+                reaction_time REAL,
                 dq_reason TEXT,
                 splits TEXT,
                 relay_swimmers TEXT,
@@ -342,20 +358,104 @@ class MeetResultsApp(QMainWindow):
             )
         ''')
 
+        # Migration: add new columns to existing databases
+        for col in ['round TEXT', 'reaction_time REAL']:
+            try:
+                cursor.execute(f'ALTER TABLE results ADD COLUMN {col}')
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS saved_results (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                result_id INTEGER UNIQUE,
-                saved_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                place REAL,
+                name TEXT,
+                year TEXT,
+                team TEXT,
+                event_name TEXT,
+                event_gender TEXT,
+                event_distance INTEGER,
+                finals_time TEXT,
+                finals_seconds REAL,
+                points REAL,
+                time_standard TEXT,
+                is_relay INTEGER,
+                is_diving INTEGER,
+                is_exhibition INTEGER,
+                is_dq INTEGER,
+                is_scratch INTEGER,
+                round TEXT,
+                reaction_time REAL,
+                dq_reason TEXT,
+                splits TEXT,
+                relay_swimmers TEXT,
+                meet_name TEXT,
+                meet_date TEXT,
+                meet_filename TEXT,
+                saved_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(name, event_name, finals_time, round, meet_name)
             )
         ''')
+
+        # Migration: if old saved_results has result_id column, migrate data to new schema
+        cursor.execute("PRAGMA table_info(saved_results)")
+        columns = {col['name'] for col in cursor.fetchall()}
+        if 'result_id' in columns and 'event_name' not in columns:
+            # Old schema — migrate to new
+            cursor.execute('''
+                SELECT r.*, m.meet_name, m.meet_date, m.filename
+                FROM saved_results s
+                JOIN results r ON s.result_id = r.id
+                JOIN meets m ON r.meet_id = m.id
+            ''')
+            old_saved = cursor.fetchall()
+            cursor.execute('DROP TABLE saved_results')
+            cursor.execute('''
+                CREATE TABLE saved_results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    place REAL, name TEXT, year TEXT, team TEXT,
+                    event_name TEXT, event_gender TEXT, event_distance INTEGER,
+                    finals_time TEXT, finals_seconds REAL, points REAL,
+                    time_standard TEXT, is_relay INTEGER, is_diving INTEGER,
+                    is_exhibition INTEGER, is_dq INTEGER, is_scratch INTEGER,
+                    round TEXT, reaction_time REAL, dq_reason TEXT,
+                    splits TEXT, relay_swimmers TEXT,
+                    meet_name TEXT, meet_date TEXT, meet_filename TEXT,
+                    saved_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(name, event_name, finals_time, round, meet_name)
+                )
+            ''')
+            for row in old_saved:
+                try:
+                    cursor.execute('''
+                        INSERT OR IGNORE INTO saved_results
+                        (place, name, year, team, event_name, event_gender, event_distance,
+                         finals_time, finals_seconds, points, time_standard,
+                         is_relay, is_diving, is_exhibition, is_dq, is_scratch,
+                         round, reaction_time, dq_reason, splits, relay_swimmers,
+                         meet_name, meet_date, meet_filename)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ''', (
+                        row['place'], row['name'], row['year'], row['team'],
+                        row['event_name'], row['event_gender'], row['event_distance'],
+                        row['finals_time'], row['finals_seconds'], row['points'],
+                        row['time_standard'], row['is_relay'], row['is_diving'],
+                        row['is_exhibition'], row['is_dq'], row['is_scratch'],
+                        row['round'], row['reaction_time'], row['dq_reason'],
+                        row['splits'], row['relay_swimmers'],
+                        row['meet_name'], row['meet_date'], row['filename'],
+                    ))
+                except Exception:
+                    pass
 
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_meet ON results(meet_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_team ON results(team)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_name ON results(name)')
 
-        # Prevent duplicate results (same swimmer, event, time at same meet)
-        cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_no_dup ON results(meet_id, name, event_name, finals_time)')
+        # Prevent duplicate results (same swimmer, event, time, round at same meet)
+        # Drop old index without round (migration)
+        cursor.execute('DROP INDEX IF EXISTS idx_no_dup')
+        cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_no_dup ON results(meet_id, name, event_name, finals_time, round)')
 
         # Migrate existing dates to ISO format
         cursor.execute('SELECT id, meet_date FROM meets WHERE meet_date IS NOT NULL')
@@ -461,16 +561,18 @@ class MeetResultsApp(QMainWindow):
 
         filter_layout.addWidget(QLabel("Event:"))
         self.event_combo = QComboBox()
-        self.event_combo.setMinimumWidth(180)
+        self.event_combo.setMaximumWidth(120)
         self.event_combo.currentIndexChanged.connect(self.apply_filters)
         filter_layout.addWidget(self.event_combo)
 
+        filter_layout.addSpacing(10)
         filter_layout.addWidget(QLabel("Stroke:"))
         self.stroke_combo = QComboBox()
         self.stroke_combo.addItems(["All", "Freestyle", "Backstroke", "Breaststroke", "Butterfly", "IM"])
         self.stroke_combo.currentIndexChanged.connect(self.apply_filters)
         filter_layout.addWidget(self.stroke_combo)
 
+        filter_layout.addSpacing(10)
         filter_layout.addWidget(QLabel("Distance:"))
         self.distance_combo = QComboBox()
         self.distance_combo.setMinimumWidth(70)
@@ -482,6 +584,12 @@ class MeetResultsApp(QMainWindow):
         self.gender_combo.addItems(["All", "Women", "Men"])
         self.gender_combo.currentIndexChanged.connect(self.apply_filters)
         filter_layout.addWidget(self.gender_combo)
+
+        filter_layout.addWidget(QLabel("Round:"))
+        self.round_combo = QComboBox()
+        self.round_combo.addItem("All")
+        self.round_combo.currentIndexChanged.connect(self.apply_filters)
+        filter_layout.addWidget(self.round_combo)
 
         self.show_exh_check = QCheckBox("Exhibition")
         self.show_exh_check.setChecked(True)
@@ -522,8 +630,8 @@ class MeetResultsApp(QMainWindow):
 
         # Results table
         self.results_table = QTableWidget()
-        self.results_table.setColumnCount(9)
-        self.results_table.setHorizontalHeaderLabels(['', 'Place', 'Name', 'Year', 'Team', 'Event', 'Time', 'Pts', 'Status'])
+        self.results_table.setColumnCount(10)
+        self.results_table.setHorizontalHeaderLabels(['', 'Place', 'Name', 'Year', 'Team', 'Event', 'Time', 'Pts', 'Round', 'Status'])
         # Use Interactive mode for all columns, stretch last section to fill
         self.results_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.results_table.horizontalHeader().setStretchLastSection(True)
@@ -541,6 +649,7 @@ class MeetResultsApp(QMainWindow):
         self.results_table.setColumnWidth(5, 200)  # Event
         self.results_table.setColumnWidth(6, 90)
         self.results_table.setColumnWidth(7, 50)
+        self.results_table.setColumnWidth(8, 70)   # Round
 
         layout.addWidget(self.results_table)
 
@@ -586,12 +695,14 @@ class MeetResultsApp(QMainWindow):
         self.saved_event_combo.currentIndexChanged.connect(self.apply_saved_filters)
         filter_layout.addWidget(self.saved_event_combo)
 
+        filter_layout.addSpacing(10)
         filter_layout.addWidget(QLabel("Stroke:"))
         self.saved_stroke_combo = QComboBox()
         self.saved_stroke_combo.addItems(["All", "Freestyle", "Backstroke", "Breaststroke", "Butterfly", "IM"])
         self.saved_stroke_combo.currentIndexChanged.connect(self.apply_saved_filters)
         filter_layout.addWidget(self.saved_stroke_combo)
 
+        filter_layout.addSpacing(10)
         filter_layout.addWidget(QLabel("Distance:"))
         self.saved_distance_combo = QComboBox()
         self.saved_distance_combo.setMinimumWidth(70)
@@ -731,21 +842,19 @@ class MeetResultsApp(QMainWindow):
         results_by_gender = {}
         for gender in ["Women", "Men"]:
             query = '''
-                SELECT r.*, m.meet_name FROM saved_results s
-                JOIN results r ON s.result_id = r.id
-                JOIN meets m ON r.meet_id = m.id
-                WHERE r.event_gender = ? AND r.is_relay = 0 AND r.is_dq = 0 AND r.is_scratch = 0
+                SELECT * FROM saved_results
+                WHERE event_gender = ? AND is_relay = 0 AND is_dq = 0 AND is_scratch = 0
             '''
             params = [gender]
             if team:
-                query += ' AND r.team = ?'
+                query += ' AND team = ?'
                 params.append(team)
 
             # Date range filter
             if self.relay_use_dates.isChecked():
                 date_from = self.relay_date_from.date().toString("yyyy-MM-dd")
                 date_to = self.relay_date_to.date().toString("yyyy-MM-dd")
-                query += ' AND m.meet_date >= ? AND m.meet_date <= ?'
+                query += ' AND meet_date >= ? AND meet_date <= ?'
                 params.extend([date_from, date_to])
 
             cursor.execute(query, params)
@@ -791,6 +900,7 @@ class MeetResultsApp(QMainWindow):
         - Individual event times are leadoff eligible
         - Relay lead-off splits are leadoff eligible
         - Relay non-leadoff splits are NOT leadoff eligible
+        - First 50 splits from 100-yard individual/lead-off events are added as (50, stroke) candidates
         """
         swimmer_times = {}
 
@@ -826,6 +936,24 @@ class MeetResultsApp(QMainWindow):
                 swimmer_times[name][key] = []
 
             swimmer_times[name][key].append((time_seconds, is_leadoff_eligible, source, meet_name))
+
+            # Extract first 50 split from 100-yard individual/lead-off events
+            if distance == 100 and is_leadoff_eligible:
+                splits_raw = r.get('splits')
+                if splits_raw:
+                    try:
+                        splits = json.loads(splits_raw) if isinstance(splits_raw, str) else splits_raw
+                    except (json.JSONDecodeError, TypeError):
+                        splits = None
+                    if splits and len(splits) >= 1:
+                        first_50 = splits[0]
+                        if isinstance(first_50, (int, float)) and 15 <= first_50 <= 40:
+                            split_key = (50, stroke)
+                            if split_key not in swimmer_times[name]:
+                                swimmer_times[name][split_key] = []
+                            split_source = f"50 split ({source})"
+                            swimmer_times[name][split_key].append(
+                                (first_50, is_leadoff_eligible, split_source, meet_name))
 
         return swimmer_times
 
@@ -1075,9 +1203,8 @@ class MeetResultsApp(QMainWindow):
         conn = self.get_db()
         cursor = conn.cursor()
         cursor.execute('''
-            SELECT DISTINCT r.team FROM saved_results s
-            JOIN results r ON s.result_id = r.id
-            WHERE r.team != "" ORDER BY r.team
+            SELECT DISTINCT team FROM saved_results
+            WHERE team != "" ORDER BY team
         ''')
         teams = [row['team'] for row in cursor.fetchall()]
         conn.close()
@@ -1180,6 +1307,22 @@ class MeetResultsApp(QMainWindow):
             self.distance_combo.addItem(str(int(row['event_distance'])))
         self.distance_combo.blockSignals(False)
 
+        # Update round filter
+        if self.current_meet_id:
+            cursor.execute('SELECT DISTINCT round FROM results WHERE meet_id = ? ORDER BY round',
+                          (self.current_meet_id,))
+        else:
+            cursor.execute('SELECT DISTINCT round FROM results ORDER BY round')
+
+        self.round_combo.blockSignals(True)
+        self.round_combo.clear()
+        self.round_combo.addItem("All")
+        for row in cursor.fetchall():
+            round_val = row['round']
+            if round_val:
+                self.round_combo.addItem(round_val)
+        self.round_combo.blockSignals(False)
+
         conn.close()
 
         self.clear_filters()
@@ -1232,6 +1375,11 @@ class MeetResultsApp(QMainWindow):
             conditions.append("event_gender = ?")
             params.append(gender)
 
+        round_filter = self.round_combo.currentText()
+        if round_filter and round_filter != "All":
+            conditions.append("round = ?")
+            params.append(round_filter)
+
         if not self.show_exh_check.isChecked():
             conditions.append("is_exhibition = 0")
 
@@ -1240,7 +1388,7 @@ class MeetResultsApp(QMainWindow):
 
         where = " AND ".join(conditions) if conditions else "1=1"
 
-        query = f"SELECT * FROM results WHERE {where} ORDER BY place ASC"
+        query = f"SELECT * FROM results WHERE {where} ORDER BY is_relay, event_distance, event_name, round, place ASC"
         cursor.execute(query, params)
         rows = cursor.fetchall()
         conn.close()
@@ -1284,6 +1432,10 @@ class MeetResultsApp(QMainWindow):
             pts = f"{row['points']:.1f}" if row['points'] else ""
             self.results_table.setItem(i, 7, QTableWidgetItem(pts))
 
+            # Round
+            round_str = row.get('round') or ''
+            self.results_table.setItem(i, 8, QTableWidgetItem(round_str))
+
             # Status
             status = ""
             color = None
@@ -1302,7 +1454,7 @@ class MeetResultsApp(QMainWindow):
             status_item = QTableWidgetItem(status)
             if color:
                 status_item.setForeground(color)
-            self.results_table.setItem(i, 8, status_item)
+            self.results_table.setItem(i, 9, status_item)
 
         self.status_bar.showMessage(f"Showing {len(self.all_results)} results")
 
@@ -1358,6 +1510,28 @@ class MeetResultsApp(QMainWindow):
             self.selected_ids.discard(rid)
         self.update_selection_label()
 
+    def _insert_saved_result(self, cursor, row, meet_name=None, meet_date=None, meet_filename=None):
+        """Insert a copy of a result into saved_results. Returns True if inserted."""
+        cursor.execute('''
+            INSERT OR IGNORE INTO saved_results
+            (place, name, year, team, event_name, event_gender, event_distance,
+             finals_time, finals_seconds, points, time_standard,
+             is_relay, is_diving, is_exhibition, is_dq, is_scratch,
+             round, reaction_time, dq_reason, splits, relay_swimmers,
+             meet_name, meet_date, meet_filename)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ''', (
+            row['place'], row['name'], row['year'], row['team'],
+            row['event_name'], row['event_gender'], row['event_distance'],
+            row['finals_time'], row['finals_seconds'], row['points'],
+            row['time_standard'], row['is_relay'], row['is_diving'],
+            row['is_exhibition'], row['is_dq'], row['is_scratch'],
+            row['round'], row['reaction_time'], row['dq_reason'],
+            row['splits'], row['relay_swimmers'],
+            meet_name, meet_date, meet_filename,
+        ))
+        return cursor.rowcount > 0
+
     def save_selected(self):
         if not self.selected_ids:
             QMessageBox.information(self, "Info", "No results selected.")
@@ -1370,8 +1544,12 @@ class MeetResultsApp(QMainWindow):
         relay_legs_saved = 0
 
         for rid in self.selected_ids:
-            # Get the result details
-            cursor.execute('SELECT * FROM results WHERE id = ?', (rid,))
+            # Get the result details with meet info
+            cursor.execute('''
+                SELECT r.*, m.meet_name, m.meet_date, m.filename AS meet_filename
+                FROM results r JOIN meets m ON r.meet_id = m.id
+                WHERE r.id = ?
+            ''', (rid,))
             row = cursor.fetchone()
             if not row:
                 continue
@@ -1381,16 +1559,15 @@ class MeetResultsApp(QMainWindow):
                 skipped_dq += 1
                 continue
 
-            # Save the main result
+            # Save the main result as a copy
             try:
-                cursor.execute('INSERT OR IGNORE INTO saved_results (result_id) VALUES (?)', (rid,))
-                if cursor.rowcount > 0:
+                if self._insert_saved_result(cursor, row, row['meet_name'], row['meet_date'], row['meet_filename']):
                     saved += 1
 
                     # If it's a relay, also save individual legs
                     if row['is_relay'] and row['relay_swimmers'] and row['splits']:
                         relay_legs_saved += self.save_relay_legs(cursor, row)
-            except:
+            except Exception:
                 pass
 
         conn.commit()
@@ -1411,7 +1588,7 @@ class MeetResultsApp(QMainWindow):
         self.update_saved_count()
 
     def save_relay_legs(self, cursor, row):
-        """Save individual relay legs as separate results"""
+        """Save individual relay legs as separate saved results (copies)."""
         relay_swimmers = json.loads(row['relay_swimmers']) if row['relay_swimmers'] else []
         splits = json.loads(row['splits']) if row['splits'] else []
 
@@ -1429,12 +1606,15 @@ class MeetResultsApp(QMainWindow):
 
         saved_count = 0
         leg_distance = row['event_distance'] // len(relay_swimmers) if len(relay_swimmers) else 50
+        meet_name = row.get('meet_name', '')
+        meet_date = row.get('meet_date', '')
+        meet_filename = row.get('meet_filename', '')
 
         for i, swimmer in enumerate(relay_swimmers):
             if i >= len(leg_times) or leg_times[i] is None:
                 continue
 
-            name, year, leg = swimmer
+            name, year, leg = swimmer[0], swimmer[1], swimmer[2]
             leg_time = leg_times[i]
             leg_stroke = strokes[i] if i < len(strokes) else 'Freestyle'
             leg_type = "lead-off" if leg == 1 else "relay"
@@ -1442,64 +1622,30 @@ class MeetResultsApp(QMainWindow):
             time_str = self.format_time(leg_time)
 
             try:
-                cursor.execute('''
-                    INSERT OR IGNORE INTO results (meet_id, place, name, year, team, event_name, event_gender,
-                        event_distance, finals_time, finals_seconds, points, time_standard,
-                        is_relay, is_diving, is_exhibition, is_dq, is_scratch, dq_reason, splits, relay_swimmers)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    row['meet_id'], None, name, year, row['team'], leg_event,
-                    row['event_gender'], leg_distance, time_str, leg_time, None, None,
-                    0, 0, 0, 0, 0, None, '[]', '[]'
-                ))
-                if cursor.rowcount > 0:
-                    result_id = cursor.lastrowid
-                    cursor.execute('INSERT OR IGNORE INTO saved_results (result_id) VALUES (?)', (result_id,))
+                leg_row = {
+                    'place': None, 'name': name, 'year': year, 'team': row['team'],
+                    'event_name': leg_event, 'event_gender': row['event_gender'],
+                    'event_distance': leg_distance, 'finals_time': time_str,
+                    'finals_seconds': leg_time, 'points': None, 'time_standard': None,
+                    'is_relay': 0, 'is_diving': 0, 'is_exhibition': 0,
+                    'is_dq': 0, 'is_scratch': 0, 'round': None,
+                    'reaction_time': None, 'dq_reason': None,
+                    'splits': '[]', 'relay_swimmers': '[]',
+                }
+                if self._insert_saved_result(cursor, leg_row, meet_name, meet_date, meet_filename):
                     saved_count += 1
-                else:
-                    # Already exists - find it and make sure it's saved
-                    cursor.execute('''SELECT id FROM results WHERE meet_id = ? AND name = ? AND event_name = ? AND finals_time = ?''',
-                                  (row['meet_id'], name, leg_event, time_str))
-                    existing = cursor.fetchone()
-                    if existing:
-                        cursor.execute('INSERT OR IGNORE INTO saved_results (result_id) VALUES (?)', (existing['id'],))
-            except sqlite3.IntegrityError:
+            except Exception:
                 pass
 
         return saved_count
 
     def calculate_relay_leg_times(self, splits, num_swimmers, event_distance):
-        """Calculate individual leg times from splits.
+        """Calculate individual leg times from cumulative relay splits.
 
-        Splits are 50 split, 100 cumulative, etc. per swimmer.
-        The last value in each swimmer's group is their total leg time.
+        Same logic as calculate_leg_times — splits are cumulative from relay start.
+        Each swimmer's leg time = their final cumulative - previous swimmer's final cumulative.
         """
-        if not splits or not num_swimmers:
-            return []
-
-        leg_distance = event_distance // num_swimmers if num_swimmers else 50
-        splits_per_leg = leg_distance // 50
-
-        # If splits are already individual leg times (one per swimmer)
-        if len(splits) == num_swimmers:
-            return list(splits)
-
-        # Each swimmer has splits_per_leg values; last value is the cumulative leg time
-        leg_times = []
-        for i in range(num_swimmers):
-            start_idx = i * splits_per_leg
-            end_idx = start_idx + splits_per_leg
-
-            if end_idx <= len(splits):
-                leg_time = splits[end_idx - 1]
-                leg_times.append(leg_time)
-            elif start_idx < len(splits):
-                leg_time = splits[len(splits) - 1]
-                leg_times.append(leg_time)
-            else:
-                leg_times.append(None)
-
-        return leg_times
+        return self.calculate_leg_times(splits, num_swimmers, event_distance)
 
     def get_stroke_pattern(self, stroke):
         """Convert stroke name to SQL LIKE pattern for event_name matching"""
@@ -1513,12 +1659,23 @@ class MeetResultsApp(QMainWindow):
         return patterns.get(stroke, f'%{stroke}%')
 
     def extract_distance_for_sort(self, event_name):
-        """Extract sort key from event name: relays sort after all individual events"""
+        """Extract sort key from event name: stroke first, then distance, relays last"""
         import re
         is_relay = 1 if 'Relay' in event_name else 0
         match = re.search(r'(\d+)', event_name)
         distance = int(match.group(1)) if match else 0
-        return (is_relay, distance)
+
+        name_lower = event_name.lower()
+        stroke_order = {
+            'free': 0, 'back': 1, 'breast': 2, 'fly': 3, 'butter': 3, 'im': 4, 'medley': 5,
+        }
+        stroke_idx = 99
+        for key, idx in stroke_order.items():
+            if key in name_lower:
+                stroke_idx = idx
+                break
+
+        return (is_relay, stroke_idx, distance)
 
     def strip_gender_prefix(self, event_name):
         """Remove Women/Men prefix from event name"""
@@ -1547,6 +1704,7 @@ class MeetResultsApp(QMainWindow):
         self.stroke_combo.setCurrentIndex(0)
         self.distance_combo.setCurrentIndex(0)
         self.gender_combo.setCurrentIndex(0)
+        self.round_combo.setCurrentIndex(0)
         self.show_exh_check.setChecked(True)
         self.show_dq_check.setChecked(True)
         self.apply_filters()
@@ -1606,8 +1764,8 @@ class MeetResultsApp(QMainWindow):
                     cursor.execute('''
                         INSERT OR IGNORE INTO results (meet_id, place, name, year, team, event_name, event_gender,
                             event_distance, finals_time, finals_seconds, points, time_standard,
-                            is_relay, is_diving, is_exhibition, is_dq, is_scratch, dq_reason, splits, relay_swimmers)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            is_relay, is_diving, is_exhibition, is_dq, is_scratch, round, reaction_time, dq_reason, splits, relay_swimmers)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         meet_id, row.get('place'), row.get('name', ''), row.get('year', ''),
                         row.get('team', ''), row.get('event_name', ''), row.get('event_gender', ''),
@@ -1615,7 +1773,8 @@ class MeetResultsApp(QMainWindow):
                         row.get('points'), row.get('time_standard', ''),
                         1 if row.get('is_relay') else 0, 0,  # is_diving always 0 now
                         1 if row.get('is_exhibition') else 0, 1 if row.get('is_dq') else 0,
-                        1 if row.get('is_scratch') else 0, row.get('dq_reason', ''),
+                        1 if row.get('is_scratch') else 0, row.get('round'), row.get('reaction_time'),
+                        row.get('dq_reason', ''),
                         json.dumps(row.get('splits', [])), json.dumps(row.get('relay_swimmers', []))
                     ))
                     if cursor.rowcount > 0:
@@ -1654,15 +1813,14 @@ class MeetResultsApp(QMainWindow):
             return
 
         reply = QMessageBox.question(self, "Confirm Delete",
-                                     "Delete this meet and all its results?",
+                                     "Delete this meet? (Saved results will be kept.)",
                                      QMessageBox.Yes | QMessageBox.No)
         if reply != QMessageBox.Yes:
             return
 
         conn = self.get_db()
         cursor = conn.cursor()
-        # Remove saved results referencing this meet's results first
-        cursor.execute('DELETE FROM saved_results WHERE result_id IN (SELECT id FROM results WHERE meet_id = ?)', (self.current_meet_id,))
+        # Saved results are independent copies — no cascade delete needed
         cursor.execute('DELETE FROM results WHERE meet_id = ?', (self.current_meet_id,))
         cursor.execute('DELETE FROM meets WHERE id = ?', (self.current_meet_id,))
         conn.commit()
@@ -1688,9 +1846,8 @@ class MeetResultsApp(QMainWindow):
 
         # Populate team filter
         cursor.execute('''
-            SELECT DISTINCT r.team FROM saved_results s
-            JOIN results r ON s.result_id = r.id
-            WHERE r.team != "" ORDER BY r.team
+            SELECT DISTINCT team FROM saved_results
+            WHERE team != "" ORDER BY team
         ''')
         teams = [row['team'] for row in cursor.fetchall()]
 
@@ -1703,9 +1860,8 @@ class MeetResultsApp(QMainWindow):
 
         # Populate event filter - strip gender prefix to avoid duplicates
         cursor.execute('''
-            SELECT DISTINCT r.event_name, r.event_distance, r.is_relay FROM saved_results s
-            JOIN results r ON s.result_id = r.id
-            ORDER BY r.is_relay, r.event_distance, r.event_name
+            SELECT DISTINCT event_name, event_distance, is_relay FROM saved_results
+            ORDER BY is_relay, event_distance, event_name
         ''')
         events_set = set()
         for row in cursor.fetchall():
@@ -1723,10 +1879,9 @@ class MeetResultsApp(QMainWindow):
 
         # Populate distance filter
         cursor.execute('''
-            SELECT DISTINCT r.event_distance FROM saved_results s
-            JOIN results r ON s.result_id = r.id
-            WHERE r.event_distance > 0
-            ORDER BY r.event_distance
+            SELECT DISTINCT event_distance FROM saved_results
+            WHERE event_distance > 0
+            ORDER BY event_distance
         ''')
         distances = [row['event_distance'] for row in cursor.fetchall()]
 
@@ -1739,10 +1894,9 @@ class MeetResultsApp(QMainWindow):
 
         # Populate meet filter
         cursor.execute('''
-            SELECT DISTINCT m.id, m.meet_name, m.filename FROM saved_results s
-            JOIN results r ON s.result_id = r.id
-            JOIN meets m ON r.meet_id = m.id
-            ORDER BY m.meet_date DESC
+            SELECT DISTINCT meet_name, meet_filename FROM saved_results
+            WHERE meet_name IS NOT NULL OR meet_filename IS NOT NULL
+            ORDER BY meet_date DESC
         ''')
         meets = cursor.fetchall()
 
@@ -1750,8 +1904,8 @@ class MeetResultsApp(QMainWindow):
         self.saved_meet_combo.clear()
         self.saved_meet_combo.addItem("All")
         for meet in meets:
-            name = meet['meet_name'] or meet['filename']
-            self.saved_meet_combo.addItem(name, meet['id'])
+            name = meet['meet_name'] or meet['meet_filename']
+            self.saved_meet_combo.addItem(name, name)
         self.saved_meet_combo.blockSignals(False)
 
         conn.close()
@@ -1773,50 +1927,48 @@ class MeetResultsApp(QMainWindow):
 
         search = self.saved_search_edit.text().strip()
         if search:
-            conditions.append("r.name LIKE ?")
+            conditions.append("name LIKE ?")
             params.append(f"%{search}%")
 
         team = self.saved_team_combo.currentText()
         if team and team != "All":
-            conditions.append("r.team = ?")
+            conditions.append("team = ?")
             params.append(team)
 
         event = self.saved_event_combo.currentText()
         if event and event != "All":
             # Match events with this base name, including relay/lead-off variants and gender prefixes
-            conditions.append("(r.event_name LIKE ? OR r.event_name LIKE ? OR r.event_name LIKE ?)")
+            conditions.append("(event_name LIKE ? OR event_name LIKE ? OR event_name LIKE ?)")
             params.extend([f"{event}%", f"Women {event}%", f"Men {event}%"])
 
         stroke = self.saved_stroke_combo.currentText()
         if stroke and stroke != "All":
             stroke_pattern = self.get_stroke_pattern(stroke)
-            conditions.append("r.event_name LIKE ?")
+            conditions.append("event_name LIKE ?")
             params.append(stroke_pattern)
 
         distance = self.saved_distance_combo.currentText()
         if distance and distance != "All":
-            conditions.append("r.event_distance = ?")
+            conditions.append("event_distance = ?")
             params.append(int(distance))
 
         # Meet filter
-        meet_id = self.saved_meet_combo.currentData()
-        if meet_id:
-            conditions.append("r.meet_id = ?")
-            params.append(meet_id)
+        meet_name_filter = self.saved_meet_combo.currentData()
+        if meet_name_filter:
+            conditions.append("(meet_name = ? OR meet_filename = ?)")
+            params.extend([meet_name_filter, meet_name_filter])
 
         gender = self.saved_gender_combo.currentText()
         if gender != "All":
-            conditions.append("r.event_gender = ?")
+            conditions.append("event_gender = ?")
             params.append(gender)
 
         where = " AND ".join(conditions) if conditions else "1=1"
 
         query = f'''
-            SELECT r.*, m.meet_name, m.filename FROM saved_results s
-            JOIN results r ON s.result_id = r.id
-            JOIN meets m ON r.meet_id = m.id
+            SELECT * FROM saved_results
             WHERE {where}
-            ORDER BY r.name ASC
+            ORDER BY name ASC
         '''
         cursor.execute(query, params)
         rows = cursor.fetchall()
@@ -1861,7 +2013,7 @@ class MeetResultsApp(QMainWindow):
 
         conn = self.get_db()
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM results WHERE id = ?", (rid,))
+        cursor.execute("SELECT * FROM saved_results WHERE id = ?", (rid,))
         result = cursor.fetchone()
         conn.close()
 
@@ -2001,7 +2153,7 @@ class MeetResultsApp(QMainWindow):
             name_item = self.saved_table.item(row, 0)  # Name is now at column 0
             if name_item:
                 rid = name_item.data(Qt.UserRole)
-                cursor.execute('DELETE FROM saved_results WHERE result_id = ?', (rid,))
+                cursor.execute('DELETE FROM saved_results WHERE id = ?', (rid,))
         conn.commit()
         conn.close()
 
