@@ -40,25 +40,9 @@ This creates a `results_parser` folder in your current location. If you don't kn
 3. Open the downloaded file and follow the installer prompts
 4. When the installer finishes, you're done with this step
 
-### Step 3: Install the Required Libraries
+### Step 3: Run the App
 
-1. Open **Finder** and find the app folder you downloaded
-2. Right-click the folder and choose **"New Terminal at Folder"**. A Terminal window will open already in the right location.
-3. Copy and paste this line, then press Enter:
-
-```
-pip3 install -r requirements.txt
-```
-
-4. Wait for it to finish (you'll see text scrolling by). When you see your username again with a `$` or `%` at the end, it's done.
-
-> If you get an error about "pip3 not found", try `python3 -m pip install -r requirements.txt` instead.
->
-> If you don't see "New Terminal at Folder" when you right-click, go to **System Settings > Keyboard > Keyboard Shortcuts > Services** and enable it under **Files and Folders**.
-
-### Step 4: Run the App
-
-Double-click the file called **`HY-TEK Results.command`** in the app folder.
+Double-click the file called **`HY-TEK Results.command`** in the app folder. The first time, it installs the libraries the app needs (a few minutes), then opens the app.
 
 - The first time, Mac may say "cannot be opened because it is from an unidentified developer."
 - If that happens: right-click the file, choose **Open**, then click **Open** in the popup. You only have to do this once.
@@ -74,25 +58,30 @@ Double-click the file called **`HY-TEK Results.command`** in the app folder.
 3. **Important:** On the first installer screen, check the box that says **"Add Python to PATH"** at the bottom before clicking Install
 4. Click **Install Now** and wait for it to finish
 
-### Step 3: Install the Required Libraries
+### Step 3: Run the App
 
-1. Open **File Explorer** and find the app folder you downloaded
-2. Click on the **address bar** at the top (where it shows the folder path), type `cmd`, and press **Enter**. A Command Prompt window will open already in the right location.
-3. Copy and paste this line, then press Enter:
+Open the app folder and double-click **`HY-TEK Results.bat`**.
 
-```
-pip install -r requirements.txt
-```
-
-4. Wait for it to finish. When you see `C:\Users\...>` again, it's done.
-
-> If you get an error about "pip not found", close Command Prompt and reopen it (the PATH needs to refresh). If it still doesn't work, try `python -m pip install -r requirements.txt`.
-
-### Step 4: Run the App
-
-Double-click **`HY-TEK Results.bat`** in the app folder.
+- **The first time**, a black window will appear and install the libraries the app needs. This takes a few minutes. Don't close it. The app opens when it's done.
+- After that, double-clicking it opens the app right away.
 
 > **Can't find the right file?** Windows hides file extensions by default, so you may see several files called "HY-TEK Results". To turn on extensions: open File Explorer, click **View** at the top, and check **File name extensions** (Windows 10) or click **View > Show > File name extensions** (Windows 11). Look for the one ending in `.bat`.
+>
+> **Folder inside a folder?** "Extract All" often creates `results_parser-main` *inside* another `results_parser-main`. Open folders until you see `gui.py`, `requirements.txt`, and `HY-TEK Results.bat` together. That is the real app folder.
+
+<details>
+<summary>Manual install (only if the automatic setup fails)</summary>
+
+1. Open the app folder, the one that contains `requirements.txt`
+2. Click the **address bar** at the top of File Explorer (the bar showing the folder path, *not* the search box), type `cmd`, and press **Enter**
+3. Paste this and press Enter:
+
+```
+python -m pip install -r requirements.txt
+```
+
+If you see `No such file or directory: 'requirements.txt'`, you're in the wrong folder. Type `dir` and press Enter. If `requirements.txt` isn't listed, go back to step 1.
+</details>
 
 ---
 
@@ -201,6 +190,7 @@ You can filter by team and date range to narrow the calculation.
 | Problem | Solution |
 |---------|----------|
 | "Python not found" | Reinstall Python and make sure "Add to PATH" is checked (Windows) |
-| "No module named PySide6" | Run the pip install command from Step 3 again |
+| "No module named PySide6" | Double-click the launcher again. It reinstalls missing libraries automatically |
+| "No such file or directory: requirements.txt" | Command Prompt/Terminal was opened in the wrong folder. See "Folder inside a folder?" in Windows Step 3 |
 | App opens but window is blank | Try resizing the window, or close and reopen |
 | PDF won't load | Make sure it's a HY-TEK Meet Manager results PDF (not a start list or psych sheet) |
