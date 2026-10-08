@@ -126,6 +126,28 @@ If you see `No such file or directory: 'requirements.txt'`, you're in the wrong 
 
 ---
 
+## Updating the App
+
+### Easiest: the update button
+
+1. Open the app and go to the **Settings** tab
+2. Click **Check for Updates**, then **Yes**
+3. When it says the update was installed, close the app and open it again
+
+That's it. If the new version needs extra libraries, the launcher installs them the next time you open the app.
+
+**Your saved results are always safe.** They're stored outside the app folder, in a hidden `.hytek_results` folder in your user folder (`C:\Users\<you>\.hytek_results` on Windows, `~/.hytek_results` on Mac). Updating never touches them.
+
+### If you're on a version without the update button
+
+1. Download the new ZIP the same way as in Step 1
+2. Delete the old app folder. If you keep meet PDFs inside it, move them somewhere else first.
+3. Extract the new ZIP and put the folder **in the same place, with the same name** as the old one. Your Desktop shortcut, Dock icon or taskbar pin will then keep working.
+
+If you downloaded with Git, you can instead run `git pull` in the app folder.
+
+---
+
 ## Using the App
 
 ### Step 1: Load Your Meet Results

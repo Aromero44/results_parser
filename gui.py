@@ -9,6 +9,12 @@ import sys
 import sqlite3
 import json
 import csv
+import os
+import shutil
+import subprocess
+import tempfile
+import urllib.request
+import zipfile
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -26,6 +32,10 @@ from hytek_parser import parse_hytek_pdf
 # Persistent database location
 DB_DIR = Path.home() / ".hytek_results"
 DB_PATH = DB_DIR / "results.db"
+
+# Where "Check for Updates" gets new versions from
+APP_DIR = Path(__file__).resolve().parent
+UPDATE_ZIP_URL = "https://github.com/Aromero44/results_parser/archive/refs/heads/main.zip"
 
 
 def normalize_date(date_str):
@@ -448,6 +458,14 @@ class MeetResultsApp(QMainWindow):
                 except Exception:
                     pass
 
+        # Alternate spellings of a team name -> the name to show
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS team_aliases (
+                alias TEXT PRIMARY KEY,
+                team TEXT NOT NULL
+            )
+        ''')
+
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_meet ON results(meet_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_team ON results(team)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_name ON results(name)')
@@ -512,6 +530,11 @@ class MeetResultsApp(QMainWindow):
         relay_widget = QWidget()
         self.tabs.addTab(relay_widget, "Best Relay")
         self.setup_best_relay_tab(relay_widget)
+
+        # Settings tab
+        settings_widget = QWidget()
+        self.tabs.addTab(settings_widget, "Settings")
+        self.setup_settings_tab(settings_widget)
 
         self.tabs.currentChanged.connect(self.on_tab_changed)
 
@@ -753,6 +776,217 @@ class MeetResultsApp(QMainWindow):
         self.saved_search_timer = QTimer()
         self.saved_search_timer.setSingleShot(True)
         self.saved_search_timer.timeout.connect(self.apply_saved_filters)
+
+    def setup_settings_tab(self, parent):
+        layout = QVBoxLayout(parent)
+
+        alias_group = QGroupBox("Team Aliases")
+        alias_layout = QVBoxLayout(alias_group)
+
+        help_label = QLabel(
+            "Different PDFs can spell the same team differently "
+            "(e.g. \"Georgia Institute of Technology-GA\" and \"GTCH\"). "
+            "Pick a team and the name it should show as. Loaded and saved results "
+            "are renamed now, and future PDFs are renamed when you load them.")
+        help_label.setWordWrap(True)
+        alias_layout.addWidget(help_label)
+
+        add_layout = QHBoxLayout()
+        add_layout.addWidget(QLabel("Rename:"))
+        self.alias_from_combo = QComboBox()
+        self.alias_from_combo.setMinimumWidth(250)
+        add_layout.addWidget(self.alias_from_combo)
+
+        add_layout.addWidget(QLabel("to:"))
+        # Editable so a brand-new display name can be typed
+        self.alias_to_combo = QComboBox()
+        self.alias_to_combo.setEditable(True)
+        self.alias_to_combo.setMinimumWidth(250)
+        add_layout.addWidget(self.alias_to_combo)
+
+        add_alias_btn = QPushButton("Add Alias")
+        add_alias_btn.clicked.connect(self.add_team_alias)
+        add_layout.addWidget(add_alias_btn)
+        add_layout.addStretch()
+        alias_layout.addLayout(add_layout)
+
+        self.alias_table = QTableWidget()
+        self.alias_table.setColumnCount(2)
+        self.alias_table.setHorizontalHeaderLabels(['Name in PDF', 'Shows as'])
+        self.alias_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.alias_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.alias_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        alias_layout.addWidget(self.alias_table)
+
+        remove_layout = QHBoxLayout()
+        remove_alias_btn = QPushButton("Remove Selected")
+        remove_alias_btn.clicked.connect(self.remove_team_aliases)
+        remove_layout.addWidget(remove_alias_btn)
+        remove_layout.addWidget(QLabel("Removing an alias only affects PDFs loaded afterwards."))
+        remove_layout.addStretch()
+        alias_layout.addLayout(remove_layout)
+
+        layout.addWidget(alias_group)
+
+        update_group = QGroupBox("Updates")
+        update_layout = QHBoxLayout(update_group)
+        update_btn = QPushButton("Check for Updates")
+        update_btn.clicked.connect(self.update_app)
+        update_layout.addWidget(update_btn)
+        update_layout.addWidget(QLabel(
+            "Downloads the latest version of the app. Your saved results are kept."))
+        update_layout.addStretch()
+        layout.addWidget(update_group)
+
+    def update_app(self):
+        reply = QMessageBox.question(self, "Check for Updates",
+                                     "Download and install the latest version of the app?",
+                                     QMessageBox.Yes | QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+
+        self.status_bar.showMessage("Checking for updates...")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.processEvents()
+        try:
+            if (APP_DIR / '.git').exists() and shutil.which('git'):
+                changed = self._update_with_git()
+            else:
+                changed = self._update_from_zip()
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            self.status_bar.showMessage("Update failed.")
+            QMessageBox.critical(self, "Update Failed", f"Couldn't update the app:\n{e}")
+            return
+        QApplication.restoreOverrideCursor()
+
+        if changed:
+            self.status_bar.showMessage("Update installed - restart the app to use it")
+            QMessageBox.information(self, "Update Installed",
+                                    "The app was updated. Close it and open it again to use the new version.")
+        else:
+            self.status_bar.showMessage("Already up to date")
+            QMessageBox.information(self, "No Updates", "You already have the latest version.")
+
+    def _update_with_git(self):
+        """Pull the latest commits. Returns True if anything changed."""
+        before = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=APP_DIR,
+                                capture_output=True, text=True).stdout
+        result = subprocess.run(['git', 'pull', '--ff-only'], cwd=APP_DIR,
+                                capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip())
+        after = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=APP_DIR,
+                               capture_output=True, text=True).stdout
+        return before != after
+
+    def _update_from_zip(self):
+        """Download the latest ZIP and copy its files over the app folder.
+
+        Files are only added or replaced, never deleted. Returns True if
+        anything changed.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = Path(tmp) / 'update.zip'
+            try:
+                with urllib.request.urlopen(UPDATE_ZIP_URL, timeout=60) as response, \
+                        open(zip_path, 'wb') as f:
+                    shutil.copyfileobj(response, f)
+            except Exception:
+                # python.org Python on Mac often lacks SSL certificates; curl has them
+                if not shutil.which('curl'):
+                    raise
+                subprocess.run(['curl', '-fsSL', '-o', str(zip_path), UPDATE_ZIP_URL],
+                               check=True, capture_output=True, timeout=120)
+
+            changed = False
+            with zipfile.ZipFile(zip_path) as zf:
+                for info in zf.infolist():
+                    # Entries look like "results_parser-main/gui.py"; drop the top folder
+                    rel = info.filename.split('/', 1)[1] if '/' in info.filename else ''
+                    if not rel or info.is_dir():
+                        continue
+                    dest = APP_DIR / rel
+                    data = zf.read(info)
+                    if not (dest.exists() and dest.read_bytes() == data):
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        dest.write_bytes(data)
+                        changed = True
+                    # Keep launchers executable on Mac
+                    mode = info.external_attr >> 16
+                    if mode & 0o111:
+                        os.chmod(dest, mode & 0o777)
+            return changed
+
+    def get_team_aliases(self, cursor):
+        cursor.execute('SELECT alias, team FROM team_aliases')
+        return {row['alias']: row['team'] for row in cursor.fetchall()}
+
+    def load_settings_tab(self):
+        conn = self.get_db()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT team FROM results WHERE team != ""
+            UNION SELECT team FROM saved_results WHERE team != ""
+            ORDER BY team
+        ''')
+        teams = [row['team'] for row in cursor.fetchall()]
+        aliases = self.get_team_aliases(cursor)
+        conn.close()
+
+        self.alias_from_combo.clear()
+        self.alias_from_combo.addItems(teams)
+        self.alias_to_combo.clear()
+        self.alias_to_combo.addItems(teams)
+        self.alias_to_combo.setEditText("")
+
+        self.alias_table.setRowCount(len(aliases))
+        for i, (alias, team) in enumerate(sorted(aliases.items())):
+            self.alias_table.setItem(i, 0, QTableWidgetItem(alias))
+            self.alias_table.setItem(i, 1, QTableWidgetItem(team))
+
+    def add_team_alias(self):
+        alias = self.alias_from_combo.currentText().strip()
+        team = self.alias_to_combo.currentText().strip()
+        if not alias or not team:
+            QMessageBox.warning(self, "Warning", "Pick a team and the name it should show as.")
+            return
+
+        conn = self.get_db()
+        cursor = conn.cursor()
+        # If the target is itself an alias, point at what it resolves to
+        team = self.get_team_aliases(cursor).get(team, team)
+        if alias == team:
+            conn.close()
+            QMessageBox.warning(self, "Warning", "A team can't be an alias of itself.")
+            return
+
+        cursor.execute('INSERT OR REPLACE INTO team_aliases (alias, team) VALUES (?, ?)', (alias, team))
+        # Aliases that pointed at the renamed team now point at its new name
+        cursor.execute('UPDATE team_aliases SET team = ? WHERE team = ?', (team, alias))
+        for table in ('results', 'saved_results'):
+            cursor.execute(f'UPDATE {table} SET team = ? WHERE team = ?', (team, alias))
+            # Relay rows use the team as their name
+            cursor.execute(f'UPDATE OR IGNORE {table} SET name = ? WHERE is_relay = 1 AND name = ?',
+                           (team, alias))
+        conn.commit()
+        conn.close()
+
+        self.load_settings_tab()
+        self.load_meet_results()
+        self.status_bar.showMessage(f"\"{alias}\" now shows as \"{team}\"")
+
+    def remove_team_aliases(self):
+        rows = sorted({index.row() for index in self.alias_table.selectedIndexes()})
+        if not rows:
+            return
+        conn = self.get_db()
+        cursor = conn.cursor()
+        for row in rows:
+            cursor.execute('DELETE FROM team_aliases WHERE alias = ?', (self.alias_table.item(row, 0).text(),))
+        conn.commit()
+        conn.close()
+        self.load_settings_tab()
 
     def setup_best_relay_tab(self, parent):
         layout = QVBoxLayout(parent)
@@ -1755,9 +1989,16 @@ class MeetResultsApp(QMainWindow):
                               (Path(filepath).name, meet_name, meet_date))
                 meet_id = cursor.lastrowid
 
+            aliases = self.get_team_aliases(cursor)
             loaded_count = 0
             skipped_dup = 0
             for idx, row in df.iterrows():
+                team = row.get('team', '')
+                team = aliases.get(team, team)
+                name = row.get('name', '')
+                if row.get('is_relay'):
+                    name = aliases.get(name, name)
+
                 # Skip diving events
                 if row.get('is_diving'):
                     continue
@@ -1769,8 +2010,8 @@ class MeetResultsApp(QMainWindow):
                             is_relay, is_diving, is_exhibition, is_dq, is_scratch, round, reaction_time, dq_reason, splits, relay_swimmers)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
-                        meet_id, row.get('place'), row.get('name', ''), row.get('year', ''),
-                        row.get('team', ''), row.get('event_name', ''), row.get('event_gender', ''),
+                        meet_id, row.get('place'), name, row.get('year', ''),
+                        team, row.get('event_name', ''), row.get('event_gender', ''),
                         row.get('event_distance', 0), row.get('finals_time', ''), row.get('finals_seconds'),
                         row.get('points'), row.get('time_standard', ''),
                         1 if row.get('is_relay') else 0, 0,  # is_diving always 0 now
@@ -1840,6 +2081,8 @@ class MeetResultsApp(QMainWindow):
         elif index == 2:
             self.load_relay_teams()
             self.compute_best_relays()
+        elif index == 3:
+            self.load_settings_tab()
 
     def load_saved_results(self):
         """Load saved results and populate filter dropdowns"""

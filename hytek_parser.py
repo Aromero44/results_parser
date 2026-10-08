@@ -411,7 +411,7 @@ _DQ_KEYWORDS = [
 
 def is_dq_reason_line(line: str) -> bool:
     lower = line.strip().lower()
-    return any(kw in lower for kw in _DQ_KEYWORDS)
+    return lower == 'other' or any(kw in lower for kw in _DQ_KEYWORDS)
 
 
 # ---------------------------------------------------------------------------
@@ -570,7 +570,7 @@ def parse_relay_swimmers(line: str) -> List[Tuple[str, Optional[str], Optional[i
 
             # Parse name and age/year from remaining content
             # Name: everything up to the last age/year token
-            m = re.match(r'^(.+?)\s+(\d{2}|FR|SO|JR|SR|GS)\s*$', content)
+            m = re.match(r'^(.+?)(?:\s+(\d{2}|FR|SO|JR|SR|GS|5Y))?\s*$', content)
             if m:
                 name = m.group(1).strip()
                 year_age = m.group(2)
@@ -582,7 +582,7 @@ def parse_relay_swimmers(line: str) -> List[Tuple[str, Optional[str], Optional[i
             return swimmers
 
     # Fallback: un-numbered format — "Name, First [M] YR Name, First YR"
-    pattern = r'([A-Za-z\'\-]+,\s*[A-Za-z]+(?:\s+[A-Z])?)\s+(FR|SO|JR|SR|GS|\d{2})'
+    pattern = r'([A-Za-z\'\-]+,\s*[A-Za-z]+(?:\s+[A-Z])?)\s+(FR|SO|JR|SR|GS|5Y|\d{2})'
     matches = re.findall(pattern, line)
     for name, year in matches:
         name = name.strip()
@@ -599,10 +599,10 @@ def is_relay_swimmer_line(line: str) -> bool:
     if re.search(r'^\d\)\s*(?:r:[+\-]?\d+\.?\d*\s+)?[A-Za-z\'\-]+', line) and ',' in line:
         return True
     # Un-numbered: two names with years
-    if re.search(r'[A-Za-z\'\-]+,\s+[A-Za-z]+.*?(FR|SO|JR|SR)\s+[A-Za-z\'\-]+,', line):
+    if re.search(r'[A-Za-z\'\-]+,\s+[A-Za-z]+.*?(FR|SO|JR|SR|GS|5Y)\s+[A-Za-z\'\-]+,', line):
         return True
     # Single name with year (last swimmer line)
-    if re.match(r'^[A-Za-z\'\-]+,\s+[A-Za-z]+.*?(FR|SO|JR|SR|GS|\d{2})$', line):
+    if re.match(r'^[A-Za-z\'\-]+,\s+[A-Za-z]+.*?(FR|SO|JR|SR|GS|5Y|\d{2})$', line):
         return True
     return False
 
@@ -655,7 +655,7 @@ def _parse_individual_invitational(line: str, event_info: dict) -> Optional[Swim
     """
     # Name pattern: allow spaces, hyphens, apostrophes in surnames (e.g. "Agundez Mora,")
     # and hyphens in first names (e.g. "Liberty-Belle")
-    name_pat = r'([A-Za-z\'\-]+(?:\s[A-Za-z\'\-]+)*,\s*[A-Za-z\s\.\-]+?)'
+    name_pat = r'([A-Za-z\'\-]+(?:\s[A-Za-z\'\-\.]+)*,\s*[A-Za-z\s\.\-]+?)'
 
     place_str = name = age = school = seed = finals = points_str = None
 
@@ -668,7 +668,7 @@ def _parse_individual_invitational(line: str, event_info: dict) -> Optional[Swim
         m = re.match(
             r'^(\d+|---)\s+'
             + name_pat +
-            r'\s+(\d{1,2})\s+'
+            r'\s+(\d{1,2}|FR|SO|JR|SR|GS|5Y)\s+'
             r'(.+?)\s+'
             r'(' + _tp + r'(?:\d+:)?\d+\.\d+|NT|NP)\s+'
             r'DQ\s+'
@@ -703,7 +703,7 @@ def _parse_individual_invitational(line: str, event_info: dict) -> Optional[Swim
         m = re.match(
             r'^(\d+|---)\s+'
             + name_pat +
-            r'\s+(\d{1,2})\s+'
+            r'\s+(\d{1,2}|FR|SO|JR|SR|GS|5Y)\s+'
             r'(.+?)\s+'
             r'(?:(' + _tp + r'(?:\d+:)?\d+\.\d+|NT|NP)\s+)?'  # optional seed
             r'DQ'
@@ -738,7 +738,7 @@ def _parse_individual_invitational(line: str, event_info: dict) -> Optional[Swim
         m = re.match(
             r'^(\d+|---)\s+'
             + name_pat +
-            r'\s+(\d{1,2})\s+'
+            r'\s+(\d{1,2}|FR|SO|JR|SR|GS|5Y)\s+'
             r'(.+?)\s+'
             r'(?:(' + _tp + r'(?:\d+:)?\d+\.\d+|NT|NP)\s+)?'  # optional seed
             r'DFS'
@@ -769,7 +769,7 @@ def _parse_individual_invitational(line: str, event_info: dict) -> Optional[Swim
     m = re.match(
         r'^(\d+|---)\s+'                     # place
         + name_pat +                          # name (Last, First M)
-        r'\s+(\d{1,2})\s+'                   # age
+        r'\s+(\d{1,2}|FR|SO|JR|SR|GS|5Y)\s+'                   # age
         r'(.+?)\s+'                           # school (non-greedy middle)
         r'(' + _tp + r'(?:\d+:)?\d+\.\d+|NT|NP|SCR)\s+'  # seed time (no DQ)
         r'(' + _tp + r'(?:\d+:)?\d+\.\d+|SCR|DQ|DFS|NS)'  # finals time
@@ -785,7 +785,7 @@ def _parse_individual_invitational(line: str, event_info: dict) -> Optional[Swim
         m = re.match(
             r'^(\d+|---)\s+'
             + name_pat +
-            r'\s+(\d{1,2})\s+'
+            r'\s+(\d{1,2}|FR|SO|JR|SR|GS|5Y)\s+'
             r'(.+?)\s+'
             r'(' + _tp + r'(?:\d+:)?\d+\.\d+|SCR|DQ|DFS|NS)'
             r'(?:\s+(\d+\.?\d*))?'
@@ -938,12 +938,12 @@ def _extract_name_year_team(blob: str) -> Tuple[str, Optional[str], str]:
       'Dalton, Alexis S FRSCAR-SC'         -> name=Dalton, Alexis S, yr=FR, team=SCAR-SC
     """
     blob = blob.strip()
-    years = ('FR', 'SO', 'JR', 'SR', 'GS')
+    years = ('FR', 'SO', 'JR', 'SR', 'GS', '5Y')
 
     # Strategy 1: Try to find year+team merged pattern
     # Look for year code (FR/SO/JR/SR/GS) followed by team code (2-5 uppercase + optional -XX)
     merged = re.search(
-        r'(FR|SO|JR|SR|GS)([A-Z]{2,5}-[A-Z]{2}|[A-Z]{2,5})\s*$',
+        r'(FR|SO|JR|SR|GS|5Y)([A-Z]{2,5}-[A-Z]{2}|[A-Z]{2,5})\s*$',
         blob
     )
     if merged:
@@ -1067,7 +1067,8 @@ def _parse_relay_invitational(line: str, event_info: dict) -> Optional[SwimResul
         r'(.+?)\s+'                          # team name (may contain spaces)
         r'([A-D])\s+'                         # relay letter
         r'((?:\d+:)?\d+\.\d+|NT|DQ|NS)\s+'   # seed time
-        r'(x?(?:\d+:)?\d+\.\d+|DQ|NS|SCR)'   # finals time
+        r'([xX]?(?:\d+:)?\d+\.\d+|DQ|NS|SCR)'   # finals time
+        r'(?:(?<=DQ)\s+((?:\d+:)?\d+\.\d+))?'  # actual time after DQ
         r'(?:\s+(\d+\.?\d*))?'
         r'\s*$',
         line
@@ -1075,11 +1076,13 @@ def _parse_relay_invitational(line: str, event_info: dict) -> Optional[SwimResul
     if not m:
         return None
 
-    place_str, team, relay, seed, finals, points_str = m.groups()
+    place_str, team, relay, seed, finals, dq_time, points_str = m.groups()
     place = int(place_str) if place_str != '---' else None
     is_exhibition = finals.startswith('x') or finals.startswith('X')
     finals_clean = finals.lstrip('xX')
     is_dq = finals_clean == 'DQ'
+    if is_dq and dq_time:
+        finals_clean = dq_time
     is_scratch = finals_clean in ('SCR', 'NS')
 
     return SwimResult(
@@ -1219,7 +1222,9 @@ def parse_text_block(text: str, event_map: dict, last_event: Optional[dict],
             continue
 
         # DQ reason line (right after DQ result)
-        if current_result and current_result.is_dq and is_dq_reason_line(line):
+        # (swimmer names like "Early, Lola" can contain DQ keywords)
+        if (current_result and current_result.is_dq and current_result.dq_reason is None
+                and is_dq_reason_line(line) and not is_relay_swimmer_line(line)):
             current_result.dq_reason = line
             continue
 
@@ -1382,6 +1387,31 @@ def extract_meet_info(pdf_path: str) -> dict:
 # Main entry point
 # ---------------------------------------------------------------------------
 
+def _parse_pages(pdf, fmt: str, splits: List[float]) -> List[SwimResult]:
+    """Parse every page of an open PDF using the given column layout."""
+    # First pass: collect event headers
+    event_map = {}
+    for page in pdf.pages:
+        for col_text in extract_columns(page, fmt, splits):
+            for line in col_text.split('\n'):
+                ei = parse_event_header(line.strip())
+                if ei:
+                    event_map[ei['event_number']] = ei
+
+    # Second pass: parse results
+    all_results = []
+    last_event = None
+    last_round = None
+
+    for page in pdf.pages:
+        for col_text in extract_columns(page, fmt, splits):
+            results, last_event, last_round = parse_text_block(
+                col_text, event_map, last_event, fmt, last_round)
+            all_results.extend(results)
+
+    return all_results
+
+
 def parse_hytek_pdf(pdf_path: str, include_meet_info: bool = False):
     """Parse HY-TEK Meet Manager PDF results into a DataFrame.
 
@@ -1391,26 +1421,15 @@ def parse_hytek_pdf(pdf_path: str, include_meet_info: bool = False):
 
     with pdfplumber.open(pdf_path) as pdf:
         fmt, splits = detect_layout(pdf)
+        all_results = _parse_pages(pdf, fmt, splits)
 
-        # First pass: collect event headers
-        event_map = {}
-        for page in pdf.pages:
-            for col_text in extract_columns(page, fmt, splits):
-                for line in col_text.split('\n'):
-                    ei = parse_event_header(line.strip())
-                    if ei:
-                        event_map[ei['event_number']] = ei
-
-        # Second pass: parse results
-        all_results = []
-        last_event = None
-        last_round = None
-
-        for page in pdf.pages:
-            for col_text in extract_columns(page, fmt, splits):
-                results, last_event, last_round = parse_text_block(
-                    col_text, event_map, last_event, fmt, last_round)
-                all_results.extend(results)
+        # Layout detection can mistake a single-column page for two columns
+        # (e.g. results with cumulative + subtractive splits), which cuts every
+        # line in half. Fall back to single-column if it parses better.
+        if fmt != '1col':
+            single = _parse_pages(pdf, '1col', [])
+            if len(single) > len(all_results):
+                all_results = single
 
     if not all_results:
         empty = pd.DataFrame()
@@ -1449,7 +1468,13 @@ def parse_hytek_pdf(pdf_path: str, include_meet_info: bool = False):
         'Georgia Institute of Technolog': 'Georgia Institute of Technology',
     }
     if 'team' in df.columns:
-        df['team'] = df['team'].replace(_TEAM_FIXES)
+        for bad, good in _TEAM_FIXES.items():
+            # Also matches state-suffixed names, e.g. "...Technolog-GA"
+            pattern = rf'^{re.escape(bad)}(?=-[A-Z]{{2}}$|$)'
+            df['team'] = df['team'].str.replace(pattern, good, regex=True)
+            # Relay rows use the team as their name
+            relay = df['is_relay']
+            df.loc[relay, 'name'] = df.loc[relay, 'name'].str.replace(pattern, good, regex=True)
 
     df = df.sort_values(['event_number', 'place']).reset_index(drop=True)
 
