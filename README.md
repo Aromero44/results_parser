@@ -216,3 +216,9 @@ You can filter by team and date range to narrow the calculation.
 | "No such file or directory: requirements.txt" | Command Prompt/Terminal was opened in the wrong folder. See "Folder inside a folder?" in Windows Step 3 |
 | App opens but window is blank | Try resizing the window, or close and reopen |
 | PDF won't load | Make sure it's a HY-TEK Meet Manager results PDF (not a start list or psych sheet) |
+
+---
+
+## About
+
+HY-TEK Results Viewer was developed by **Antonio Romero**. To report a problem or suggest a feature, open an issue on [GitHub](https://github.com/Aromero44/results_parser/issues) or get in touch with Antonio directly.

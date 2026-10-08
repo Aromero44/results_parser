@@ -543,6 +543,10 @@ class MeetResultsApp(QMainWindow):
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Ready - Upload a PDF to get started")
 
+        credit_label = QLabel("Developed by Antonio Romero")
+        credit_label.setStyleSheet("color: gray; padding-right: 6px;")
+        self.status_bar.addPermanentWidget(credit_label)
+
     def setup_meets_tab(self, parent):
         layout = QVBoxLayout(parent)
 
