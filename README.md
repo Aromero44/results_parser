@@ -185,6 +185,16 @@ Switch to the **Saved Results** tab to see everything you've saved across all me
 - Remove results you no longer want
 - Export to CSV for use in spreadsheets
 
+### Fixing Something That Loaded Wrong
+
+If a name, year, team, event, time, place or points value loaded wrong, you can fix it in the app:
+
+1. Check **Edit Mode** (top right of the **Meet Results** or **Saved Results** tab)
+2. Double-click the cell, type the correct value, and press **Enter**
+3. The cell turns yellow so you can always see what was corrected by hand
+
+Fixing a result in **Meet Results** also fixes any copy you already saved. To fix a relay's swimmers, double-click the relay's **Round** or **Status** cell (or **Meet**/**Date** in Saved Results), then double-click a swimmer's name or year. Turn Edit Mode off when you're done, and double-click goes back to opening details.
+
 ### Step 5: Best Relay Calculator
 
 The **Best Relay** tab automatically computes your fastest possible relay lineups using your saved results. It calculates five relays for both Women and Men:
