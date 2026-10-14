@@ -656,10 +656,31 @@ class MeetResultsApp(QMainWindow):
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_team ON results(team)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_name ON results(name)')
 
-        # Prevent duplicate results (same swimmer, event, time, round at same meet)
-        # Drop old index without round (migration)
+        # Prevent duplicate results (same swimmer, event, time, round at same meet).
+        # The unique keys use COALESCE because SQLite treats NULLs as distinct,
+        # and round is NULL for every dual-meet result, so the old indexes let
+        # re-loads and repeat saves create duplicates. Remove those first.
+        cursor.execute('''
+            DELETE FROM results WHERE id NOT IN (
+                SELECT MIN(id) FROM results
+                GROUP BY meet_id, name, event_name, finals_time, COALESCE(round, '')
+            )
+        ''')
         cursor.execute('DROP INDEX IF EXISTS idx_no_dup')
-        cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_no_dup ON results(meet_id, name, event_name, finals_time, round)')
+        cursor.execute('''
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_results_unique
+            ON results(meet_id, name, event_name, finals_time, COALESCE(round, ''))
+        ''')
+        cursor.execute('''
+            DELETE FROM saved_results WHERE id NOT IN (
+                SELECT MIN(id) FROM saved_results
+                GROUP BY name, event_name, finals_time, COALESCE(round, ''), COALESCE(meet_name, '')
+            )
+        ''')
+        cursor.execute('''
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_saved_unique
+            ON saved_results(name, event_name, finals_time, COALESCE(round, ''), COALESCE(meet_name, ''))
+        ''')
 
         # Migrate existing dates to ISO format
         cursor.execute('SELECT id, meet_date FROM meets WHERE meet_date IS NOT NULL')
@@ -1450,37 +1471,35 @@ class MeetResultsApp(QMainWindow):
             candidates.sort(key=lambda x: x[1])
             leg_candidates.append(candidates[:8])
 
-        # For free relays (all same stroke), just pick top 4 distinct swimmers
+        # For free relays (all same stroke): a leadoff plus the 3 fastest others
         if not is_medley:
-            seen = set()
-            relay = []
-            # Leg 0 needs leadoff-eligible
-            for c in leg_candidates[0]:
-                if c[0] not in seen:
-                    relay.append((c[0], 'Freestyle', c[1], c[2], c[3]))
-                    seen.add(c[0])
-                    break
-            # Fill remaining legs from all candidates (re-derive with any time)
+            # Legs 2-4 can use any time, including flying-start relay splits
             key = (distance, 'Freestyle')
             all_candidates = []
             for swimmer, times_dict in swimmer_times.items():
-                if swimmer in seen or key not in times_dict:
+                if key not in times_dict:
                     continue
-                best_time = None
-                best_source = None
-                best_meet = None
-                for t, _, s, mn in times_dict[key]:
-                    if best_time is None or t < best_time:
-                        best_time = t
-                        best_source = s
-                        best_meet = mn
-                if best_time is not None:
-                    all_candidates.append((swimmer, best_time, best_source, best_meet))
+                best = min(times_dict[key], key=lambda entry: entry[0])
+                all_candidates.append((swimmer, best[0], best[2], best[3]))
             all_candidates.sort(key=lambda x: x[1])
-            for c in all_candidates:
-                if len(relay) >= 4:
-                    break
-                relay.append((c[0], 'Freestyle', c[1], c[2], c[3]))
+
+            # The fastest leadoff isn't always best: a swimmer with a much
+            # faster flying split may be worth more on a later leg. Try each.
+            best_relay = None
+            best_total = float('inf')
+            for leadoff in leg_candidates[0] or [None]:
+                relay = []
+                if leadoff:
+                    relay.append((leadoff[0], 'Freestyle', leadoff[1], leadoff[2], leadoff[3]))
+                for c in all_candidates:
+                    if len(relay) >= 4:
+                        break
+                    if not leadoff or c[0] != leadoff[0]:
+                        relay.append((c[0], 'Freestyle', c[1], c[2], c[3]))
+                total = sum(leg[2] for leg in relay)
+                if best_relay is None or (len(relay), -total) > (len(best_relay), -best_total):
+                    best_relay, best_total = relay, total
+            relay = best_relay
             while len(relay) < 4:
                 relay.append((None, 'Freestyle', None, None, None))
             return relay
@@ -2325,14 +2344,19 @@ class MeetResultsApp(QMainWindow):
                           (meet_name, meet_date))
             existing = cursor.fetchone()
             if existing:
-                reply = QMessageBox.question(self, "Duplicate Meet",
-                    f"'{meet_name}' is already loaded. Load again anyway?",
+                reply = QMessageBox.question(self, "Meet Already Loaded",
+                    f"'{meet_name}' is already loaded. Reload it?\n\n"
+                    "This re-reads the PDF and replaces this meet's results, so any hand "
+                    "edits to it are lost. Your saved results are not changed.",
                     QMessageBox.Yes | QMessageBox.No)
                 if reply != QMessageBox.Yes:
                     conn.close()
                     self.status_bar.showMessage("Load cancelled - meet already exists")
                     return
                 meet_id = existing['id']
+                # Inserts skip rows that already exist, so clear the old ones or
+                # parser fixes would never reach a reloaded meet
+                cursor.execute('DELETE FROM results WHERE meet_id = ?', (meet_id,))
             else:
                 cursor.execute('INSERT INTO meets (filename, meet_name, meet_date) VALUES (?, ?, ?)',
                               (Path(filepath).name, meet_name, meet_date))
@@ -2419,8 +2443,9 @@ class MeetResultsApp(QMainWindow):
         conn.close()
 
         self.current_meet_id = None
-        self.refresh_meets_list()
-        self.results_table.setRowCount(0)
+        self.refresh_meets_list()  # selects and shows the next meet, if any
+        if not self.current_meet_id:
+            self.results_table.setRowCount(0)
         self.update_saved_count()
         self.status_bar.showMessage("Meet deleted")
 
@@ -2846,10 +2871,10 @@ class MeetResultsApp(QMainWindow):
         if filepath:
             with open(filepath, 'w', newline='') as f:
                 writer = csv.writer(f)
-                writer.writerow(['Place', 'Name', 'Year', 'Team', 'Event', 'Time', 'Points', 'Status'])
+                writer.writerow(['Place', 'Name', 'Year', 'Team', 'Event', 'Time', 'Points', 'Round', 'Status'])
                 for i in range(self.results_table.rowCount()):
                     row = []
-                    for j in range(1, 9):  # Skip checkbox column
+                    for j in range(1, 10):  # Skip checkbox column
                         item = self.results_table.item(i, j)
                         row.append(item.text() if item else '')
                     writer.writerow(row)

@@ -255,6 +255,8 @@ def parse_event_header(line: str) -> Optional[dict]:
         gender = match.group(2)
         distance = int(match.group(3))
         stroke_part = match.group(4).strip()
+        # Scheduling notes for combined events, e.g. "Freestyle Combined with EV 4"
+        stroke_part = re.sub(r'\s+(?:Combined|Swim) with EV\s*\d+.*$', '', stroke_part)
         is_relay = 'Relay' in stroke_part
         stroke = stroke_part.replace(' Relay', '').strip()
 
