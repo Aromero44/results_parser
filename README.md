@@ -189,17 +189,17 @@ Switch to the **Saved Results** tab to see everything you've saved across all me
 
 ### Fixing Something That Loaded Wrong
 
-If a name, year, team, event, time, place, points or status loaded wrong, you can fix it in the app:
+Double-click any result (in **Meet Results** or **Saved Results**) to open it. Every detail is in a text box, so you can correct it:
 
-1. Check **Edit Mode** (top right of the **Meet Results** or **Saved Results** tab)
-2. Double-click the cell, type the correct value, and press **Enter**. For **Status**, pick OK, DQ, SCR (scratch) or EXH (exhibition) from the dropdown.
-3. The cell turns yellow so you can always see what was corrected by hand
+- **Name, Year, Team, Event, Time, Place, Points**, and **Status** (OK, DQ, SCR for scratch, EXH for exhibition) in Meet Results
+- **Splits:** each 50's split, separated by spaces
+- **Relays:** each swimmer's name, year and split
 
-Fixing a result in **Meet Results** also fixes any copy you already saved.
+Click **Save Changes**. If something doesn't look right (for example a time typed as "fast"), the app lists what to fix and saves nothing until it's fixed. Corrected values are highlighted in yellow, in the window and in the table, so you can always see what was changed by hand.
 
-**Relays:** right-click the relay and choose **Show Details...**. In Edit Mode, double-click a swimmer's name, year or split time to fix it. Changing a split time also updates that leg wherever it was saved, including as an individual swim.
+Fixing a result in **Meet Results** also fixes any copy you already saved, including relay legs saved as individual swims.
 
-Turn Edit Mode off when you're done. Double-click then goes back to opening details.
+To save some legs of a relay as individual swims, open the relay, check those legs, and click **Save Checked Legs as Individual Swims**.
 
 ### Step 5: Best Relay Calculator
 
