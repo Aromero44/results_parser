@@ -243,6 +243,9 @@ class RelayDetailsDialog(QDialog):
         else:
             strokes = ['Freestyle'] * 4
 
+        num_swimmers = len(self.relay_swimmers)
+        leg_distance = self.row_data['event_distance'] // num_swimmers if num_swimmers else 50
+
         saved_count = 0
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
@@ -268,7 +271,7 @@ class RelayDetailsDialog(QDialog):
 
             leg_stroke = strokes[i] if i < len(strokes) else 'Freestyle'
             leg_type = "lead-off" if leg == 1 else "relay"
-            leg_event = f"50 {leg_stroke} ({leg_type})"
+            leg_event = f"{leg_distance} {leg_stroke} ({leg_type})"
             time_str = self.format_time(leg_time)
 
             try:
@@ -282,7 +285,7 @@ class RelayDetailsDialog(QDialog):
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ''', (
                     None, name, year, self.row_data['team'], leg_event,
-                    self.row_data['event_gender'], 50, time_str, leg_time, None, None,
+                    self.row_data['event_gender'], leg_distance, time_str, leg_time, None, None,
                     0, 0, 0, 0, 0, None, None, None, '[]', '[]',
                     meet_name, meet_date, meet_filename,
                 ))
