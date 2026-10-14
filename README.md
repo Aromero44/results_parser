@@ -214,10 +214,10 @@ You can filter by team and date range to narrow the calculation.
 **How the relay calculator works:**
 
 - It pulls each swimmer's best time for the relevant distance and stroke from your saved results
-- It considers three time sources: **individual event times**, **lead-off relay splits**, and **first-50 splits** from 100-yard individual or lead-off events (for 50-yard relay legs)
-- The **lead-off leg** of each relay can only use leadoff-eligible times (individual swims or lead-off relay splits — not mid-relay splits, since those have the benefit of a flying start)
+- It considers these time sources: **individual event times**, **lead-off relay splits**, **flying relay splits** (legs 2–4), and the **first splits** of longer swims (for example the first 50 of a 100, or the first 100 of a 200), from both individual swims and relay legs
+- The **lead-off leg** can only use flat-start times: individual swims, lead-off splits, or the first splits of those. A flying relay split, or the first split of a flying leg, is never used to lead off. Flat-start times can be used on any leg.
 - For **medley relays**, it searches across the top candidates for each stroke to find the four-swimmer combination with the lowest total time, correctly handling swimmers who are fast in multiple strokes
-- For **freestyle relays**, it picks the fastest leadoff-eligible swimmer first, then the next three fastest
+- For **freestyle relays**, it tries each possible lead-off swimmer and adds the three fastest remaining swimmers, keeping the lineup with the lowest total
 
 ---
 

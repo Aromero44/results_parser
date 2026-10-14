@@ -300,10 +300,15 @@ class RelayDetailsDialog(QDialog):
                                                       self.row_data.get('finals_seconds'))
             self.parent().save_relay_data(self.table_name, self.row_data, 'splits', self.splits)
             self.parent().update_saved_leg(self.table_name, self.row_data, self.relay_swimmers[i][0],
-                                           self.leg_event_name(i), old, self.leg_times[i])
+                                           self.leg_event_name(i), old, self.leg_times[i],
+                                           self.current_leg_splits(i))
             item.setText(self.format_time(self.leg_times[i]))
             style_cell(item, True, True)
         self.table.blockSignals(False)
+
+    def current_leg_splits(self, i):
+        return self.leg_splits(self.splits, i, len(self.relay_swimmers),
+                               self.row_data['event_distance'], self.row_data.get('finals_seconds'))
 
     def leg_event_name(self, i):
         """Event name a leg gets when saved as an individual swim."""
@@ -342,20 +347,38 @@ class RelayDetailsDialog(QDialog):
     @staticmethod
     def set_leg_time(splits, leg_index, num_swimmers, event_distance, finals_seconds, new_time):
         """Return a copy of splits with one leg's time changed."""
-        splits = list(splits)
         leg_distance = event_distance // num_swimmers if num_swimmers else 50
         splits_per_leg = max(leg_distance // 50, 1)
-        if RelayDetailsDialog.splits_are_cumulative(splits, finals_seconds):
-            # Convert to per-leg form (times measured from each leg's start,
-            # the last one being the leg time) so an edit can't make the
-            # splits stop looking cumulative and get misread
-            per_leg = []
-            for j, value in enumerate(splits):
-                leg_start = j - j % splits_per_leg
-                per_leg.append(round(value - (splits[leg_start - 1] if leg_start else 0.0), 2))
-            splits = per_leg
+        # Per-leg form, so an edit can't make the splits stop looking
+        # cumulative and get misread
+        splits = RelayDetailsDialog.to_per_leg(splits, splits_per_leg, finals_seconds)
         splits[(leg_index + 1) * splits_per_leg - 1] = round(new_time, 2)
         return splits
+
+    @staticmethod
+    def to_per_leg(splits, splits_per_leg, finals_seconds=None):
+        """Return splits measured from each leg's start (the last one in each
+        leg is the leg time). HY-TEK relay splits already use this form;
+        cumulative splits are converted."""
+        splits = list(splits)
+        if not RelayDetailsDialog.splits_are_cumulative(splits, finals_seconds):
+            return splits
+        per_leg = []
+        for j, value in enumerate(splits):
+            leg_start = j - j % splits_per_leg
+            per_leg.append(round(value - (splits[leg_start - 1] if leg_start else 0.0), 2))
+        return per_leg
+
+    @staticmethod
+    def leg_splits(splits, leg_index, num_swimmers, event_distance, finals_seconds=None):
+        """Per-50 splits of one leg (like an individual swim's), or [] if missing."""
+        leg_distance = event_distance // num_swimmers if num_swimmers else 50
+        splits_per_leg = max(leg_distance // 50, 1)
+        per_leg = RelayDetailsDialog.to_per_leg(splits, splits_per_leg, finals_seconds)
+        segment = per_leg[leg_index * splits_per_leg:(leg_index + 1) * splits_per_leg]
+        if len(segment) < splits_per_leg:
+            return []
+        return [segment[0]] + [round(segment[k] - segment[k - 1], 2) for k in range(1, len(segment))]
 
     @staticmethod
     def calculate_leg_times(splits, num_swimmers, event_distance, finals_seconds=None):
@@ -462,11 +485,14 @@ class RelayDetailsDialog(QDialog):
                 ''', (
                     None, name, year, self.row_data['team'], leg_event,
                     self.row_data['event_gender'], leg_distance, time_str, leg_time, None, None,
-                    0, 0, 0, 0, 0, None, None, None, '[]', '[]',
+                    0, 0, 0, 0, 0, None, None, None, json.dumps(self.current_leg_splits(i)), '[]',
                     meet_name, meet_date, meet_filename,
                 ))
                 if cursor.rowcount > 0:
                     saved_count += 1
+                else:
+                    self.parent().backfill_leg_splits(cursor, name, leg_event, time_str, meet_name,
+                                                      self.current_leg_splits(i))
             except Exception:
                 pass
 
@@ -1364,9 +1390,10 @@ class MeetResultsApp(QMainWindow):
         Returns: {swimmer_name: {(distance, stroke): [(time, is_leadoff_eligible, source, meet_name), ...]}}
 
         - Individual event times are leadoff eligible
-        - Relay lead-off splits are leadoff eligible
-        - Relay non-leadoff splits are NOT leadoff eligible
-        - First 50 splits from 100-yard individual/lead-off events are added as (50, stroke) candidates
+        - Relay lead-off splits are leadoff eligible (and usable on any leg)
+        - Relay non-leadoff splits are NOT leadoff eligible (flying start)
+        - First splits of any swim (first 50/100/200) are candidates too, with
+          the eligibility of the swim they came from
         """
         swimmer_times = {}
 
@@ -1403,25 +1430,34 @@ class MeetResultsApp(QMainWindow):
 
             swimmer_times[name][key].append((time_seconds, is_leadoff_eligible, source, meet_name))
 
-            # Extract first 50 split from 100-yard individual/lead-off events
-            if distance == 100 and is_leadoff_eligible:
-                splits_raw = r.get('splits')
-                if splits_raw:
-                    try:
-                        splits = json.loads(splits_raw) if isinstance(splits_raw, str) else splits_raw
-                    except (json.JSONDecodeError, TypeError):
-                        splits = None
-                    if splits and len(splits) >= 1:
-                        first_50 = splits[0]
-                        if isinstance(first_50, (int, float)) and 15 <= first_50 <= 40:
-                            split_key = (50, stroke)
-                            if split_key not in swimmer_times[name]:
-                                swimmer_times[name][split_key] = []
-                            split_source = f"50 split ({source})"
-                            swimmer_times[name][split_key].append(
-                                (first_50, is_leadoff_eligible, split_source, meet_name))
+            # First 50/100/200 of a longer swim (e.g. the first 50 of a 100)
+            for split_distance, split_time in self.first_split_times(r.get('splits'), distance, time_seconds):
+                split_key = (split_distance, stroke)
+                swimmer_times[name].setdefault(split_key, []).append(
+                    (split_time, is_leadoff_eligible, f"{split_distance} split ({source})", meet_name))
 
         return swimmer_times
+
+    @staticmethod
+    def first_split_times(splits_raw, distance, time_seconds):
+        """[(50, t), (100, t), (200, t)] elapsed times at those distances in a
+        longer swim, from its per-50 splits. Skipped when the splits are
+        incomplete (e.g. a missed touchpad), since partial sums would be wrong."""
+        try:
+            splits = json.loads(splits_raw) if isinstance(splits_raw, str) else splits_raw
+        except (json.JSONDecodeError, TypeError):
+            return []
+        if (not splits or len(splits) * 50 != distance
+                or not all(isinstance(x, (int, float)) for x in splits)
+                or abs(sum(splits) - time_seconds) > 0.1):
+            return []
+        times = []
+        elapsed = 0.0
+        for k, split in enumerate(splits[:-1]):
+            elapsed += split
+            if (k + 1) * 50 in (50, 100, 200):
+                times.append(((k + 1) * 50, round(elapsed, 2)))
+        return times
 
     def extract_stroke(self, event_name):
         """Extract stroke from event name"""
@@ -2065,7 +2101,17 @@ class MeetResultsApp(QMainWindow):
         row.update(sets)
         self.status_bar.showMessage("Relay swimmers updated" if field == 'relay_swimmers' else "Relay split updated")
 
-    def update_saved_leg(self, table, relay_row, name, leg_event, old_seconds, new_seconds):
+    def backfill_leg_splits(self, cursor, name, leg_event, finals_time, meet_name, splits):
+        """Add splits to an already-saved relay leg that was saved without them."""
+        if not splits:
+            return
+        cursor.execute('''
+            UPDATE saved_results SET splits = ?
+            WHERE name = ? AND event_name = ? AND finals_time = ? AND COALESCE(meet_name, '') = COALESCE(?, '')
+              AND (splits IS NULL OR splits = '[]')
+        ''', (json.dumps(splits), name, leg_event, finals_time, meet_name))
+
+    def update_saved_leg(self, table, relay_row, name, leg_event, old_seconds, new_seconds, new_splits):
         """Carry an edited relay leg time over to that leg's saved individual swim."""
         conn = self.get_db()
         cursor = conn.cursor()
@@ -2080,9 +2126,9 @@ class MeetResultsApp(QMainWindow):
         ''', (meet_name, name, leg_event, old_seconds))
         for leg in cursor.fetchall():
             cursor.execute('''
-                UPDATE OR IGNORE saved_results SET finals_time = ?, finals_seconds = ?, edited_fields = ?
+                UPDATE OR IGNORE saved_results SET finals_time = ?, finals_seconds = ?, splits = ?, edited_fields = ?
                 WHERE id = ?
-            ''', (self.format_time(new_seconds), new_seconds,
+            ''', (self.format_time(new_seconds), new_seconds, json.dumps(new_splits),
                   add_edited_field(leg['edited_fields'], 'finals_time'), leg['id']))
         conn.commit()
         conn.close()
@@ -2167,9 +2213,10 @@ class MeetResultsApp(QMainWindow):
                 if self._insert_saved_result(cursor, row, row['meet_name'], row['meet_date'], row['meet_filename']):
                     saved += 1
 
-                    # If it's a relay, also save individual legs
-                    if row['is_relay'] and row['relay_swimmers'] and row['splits']:
-                        relay_legs_saved += self.save_relay_legs(cursor, row)
+                # If it's a relay, also save individual legs (and fill in leg
+                # splits on legs saved before they were stored)
+                if row['is_relay'] and row['relay_swimmers'] and row['splits']:
+                    relay_legs_saved += self.save_relay_legs(cursor, row)
             except Exception:
                 pass
 
@@ -2201,6 +2248,9 @@ class MeetResultsApp(QMainWindow):
         # Calculate leg times
         leg_times = self.calculate_relay_leg_times(splits, len(relay_swimmers), row['event_distance'],
                                                    row['finals_seconds'])
+        leg_splits = [RelayDetailsDialog.leg_splits(splits, i, len(relay_swimmers), row['event_distance'],
+                                                    row['finals_seconds'])
+                      for i in range(len(relay_swimmers))]
 
         # Determine strokes
         if 'Medley' in (row['event_name'] or ''):
@@ -2234,10 +2284,12 @@ class MeetResultsApp(QMainWindow):
                     'is_relay': 0, 'is_diving': 0, 'is_exhibition': 0,
                     'is_dq': 0, 'is_scratch': 0, 'round': None,
                     'reaction_time': None, 'dq_reason': None,
-                    'splits': '[]', 'relay_swimmers': '[]',
+                    'splits': json.dumps(leg_splits[i]), 'relay_swimmers': '[]',
                 }
                 if self._insert_saved_result(cursor, leg_row, meet_name, meet_date, meet_filename):
                     saved_count += 1
+                else:
+                    self.backfill_leg_splits(cursor, name, leg_event, time_str, meet_name, leg_splits[i])
             except Exception:
                 pass
 
