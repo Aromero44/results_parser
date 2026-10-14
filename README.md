@@ -187,13 +187,17 @@ Switch to the **Saved Results** tab to see everything you've saved across all me
 
 ### Fixing Something That Loaded Wrong
 
-If a name, year, team, event, time, place or points value loaded wrong, you can fix it in the app:
+If a name, year, team, event, time, place, points or status loaded wrong, you can fix it in the app:
 
 1. Check **Edit Mode** (top right of the **Meet Results** or **Saved Results** tab)
-2. Double-click the cell, type the correct value, and press **Enter**
+2. Double-click the cell, type the correct value, and press **Enter**. For **Status**, pick OK, DQ, SCR (scratch) or EXH (exhibition) from the dropdown.
 3. The cell turns yellow so you can always see what was corrected by hand
 
-Fixing a result in **Meet Results** also fixes any copy you already saved. To fix a relay's swimmers, double-click the relay's **Round** or **Status** cell (or **Meet**/**Date** in Saved Results), then double-click a swimmer's name or year. Turn Edit Mode off when you're done, and double-click goes back to opening details.
+Fixing a result in **Meet Results** also fixes any copy you already saved.
+
+**Relays:** right-click the relay and choose **Show Details...**. In Edit Mode, double-click a swimmer's name, year or split time to fix it. Changing a split time also updates that leg wherever it was saved, including as an individual swim.
+
+Turn Edit Mode off when you're done. Double-click then goes back to opening details.
 
 ### Step 5: Best Relay Calculator
 

@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView,
     QLabel, QPushButton, QComboBox, QLineEdit, QCheckBox,
     QFileDialog, QMessageBox, QDialog, QGroupBox, QStatusBar,
-    QMenuBar, QMenu, QAbstractItemView, QDateEdit
+    QMenuBar, QMenu, QAbstractItemView, QDateEdit, QStyledItemDelegate
 )
 from PySide6.QtCore import Qt, QTimer, QDate
 from PySide6.QtGui import QAction, QColor, QKeySequence, QIcon
@@ -39,7 +39,9 @@ APP_DIR = Path(__file__).resolve().parent
 UPDATE_ZIP_URL = "https://github.com/Aromero44/results_parser/archive/refs/heads/main.zip"
 
 # Edit Mode: table column -> database field that column edits
-RESULTS_EDIT_COLUMNS = {1: 'place', 2: 'name', 3: 'year', 4: 'team', 5: 'event_name', 6: 'finals_time', 7: 'points'}
+RESULTS_EDIT_COLUMNS = {1: 'place', 2: 'name', 3: 'year', 4: 'team', 5: 'event_name', 6: 'finals_time', 7: 'points',
+                        9: 'status'}
+STATUS_FLAGS = {'DQ': 'is_dq', 'SCR': 'is_scratch', 'EXH': 'is_exhibition'}
 SAVED_EDIT_COLUMNS = {0: 'name', 1: 'year', 2: 'team', 3: 'event_name', 4: 'finals_time'}
 EDITED_COLOR = QColor(255, 236, 153)
 
@@ -47,6 +49,11 @@ EDITED_COLOR = QColor(255, 236, 153)
 def parse_edit(field, text):
     """Validate an edited cell. Returns (database updates, error message)."""
     text = text.strip()
+    if field == 'status':
+        status = text.upper()
+        if status not in STATUS_FLAGS and status not in ('', 'OK'):
+            return None, "Status must be OK, DQ, SCR or EXH."
+        return {flag: int(status == key) for key, flag in STATUS_FLAGS.items()}, None
     if field == 'place':
         if text in ('', '-'):
             return {'place': None}, None
@@ -73,6 +80,23 @@ def parse_edit(field, text):
     if field == 'name' and not text:
         return None, "Name can't be blank."
     return {field: text}, None
+
+
+class StatusDelegate(QStyledItemDelegate):
+    """Dropdown editor for the Status column."""
+
+    def createEditor(self, parent, option, index):
+        combo = QComboBox(parent)
+        combo.addItems(['OK', *STATUS_FLAGS])
+        # Save as soon as a choice is picked
+        combo.activated.connect(lambda: (self.commitData.emit(combo), self.closeEditor.emit(combo)))
+        return combo
+
+    def setEditorData(self, editor, index):
+        editor.setCurrentText(index.data() if index.data() in STATUS_FLAGS else 'OK')
+
+    def setModelData(self, editor, model, index):
+        model.setData(index, editor.currentText())
 
 
 def add_edited_field(edited_fields, field):
@@ -145,7 +169,9 @@ class RelayDetailsDialog(QDialog):
         splits = json.loads(self.row_data['splits']) if self.row_data['splits'] else []
 
         # Calculate leg times
-        self.leg_times = self.calculate_leg_times(splits, len(relay_swimmers), self.row_data['event_distance'])
+        self.splits = splits
+        self.leg_times = self.calculate_leg_times(splits, len(relay_swimmers), self.row_data['event_distance'],
+                                                  self.row_data.get('finals_seconds'))
         self.relay_swimmers = relay_swimmers
 
         if self.read_only:
@@ -192,14 +218,14 @@ class RelayDetailsDialog(QDialog):
             self.table.setColumnWidth(3, 50)
             self.table.setColumnWidth(4, 100)
 
-        # Name/Year column positions (read-only view has no checkbox column)
-        self.name_col, self.year_col = (1, 2) if self.read_only else (2, 3)
+        # Name/Year/Split column positions (read-only view has no checkbox column)
+        self.name_col, self.year_col, self.time_col = (1, 2, 3) if self.read_only else (2, 3, 4)
         if self.editable:
-            layout.addWidget(QLabel("Edit Mode: double-click a swimmer's name or year to fix it."))
+            layout.addWidget(QLabel("Edit Mode: double-click a swimmer's name, year or split time to fix it."))
             self.table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
             for i in range(self.table.rowCount()):
                 for col in range(self.table.columnCount()):
-                    if col not in (self.name_col, self.year_col):
+                    if col not in (self.name_col, self.year_col, self.time_col):
                         style_cell(self.table.item(i, col), False, False)
             self.table.itemChanged.connect(self.on_swimmer_edited)
         else:
@@ -229,6 +255,9 @@ class RelayDetailsDialog(QDialog):
 
     def on_swimmer_edited(self, item):
         col = item.column()
+        if col == self.time_col:
+            self.on_leg_time_edited(item)
+            return
         if col not in (self.name_col, self.year_col):
             return
         i = item.row()
@@ -243,9 +272,49 @@ class RelayDetailsDialog(QDialog):
         elif text != (swimmer[index] or ''):
             swimmer[index] = text or None
             self.relay_swimmers[i] = swimmer
-            self.parent().save_relay_swimmers(self.table_name, self.row_data, self.relay_swimmers)
+            self.parent().save_relay_data(self.table_name, self.row_data, 'relay_swimmers', self.relay_swimmers)
             style_cell(item, True, True)
         self.table.blockSignals(False)
+
+    def on_leg_time_edited(self, item):
+        i = item.row()
+        old = self.leg_times[i] if i < len(self.leg_times) else None
+        seconds = time_to_seconds(item.text().strip())
+
+        error = None
+        if seconds is None:
+            error = "Split time must look like 22.45 or 1:42.10."
+        elif old is None:
+            error = "This relay has no split for that leg, so it can't be changed here."
+
+        self.table.blockSignals(True)
+        if error:
+            QMessageBox.warning(self, "Can't Save", error)
+            item.setText(self.format_time(old) if old else "")
+        elif round(seconds, 2) != old:
+            self.splits = self.set_leg_time(self.splits, i, len(self.relay_swimmers),
+                                            self.row_data['event_distance'],
+                                            self.row_data.get('finals_seconds'), seconds)
+            self.leg_times = self.calculate_leg_times(self.splits, len(self.relay_swimmers),
+                                                      self.row_data['event_distance'],
+                                                      self.row_data.get('finals_seconds'))
+            self.parent().save_relay_data(self.table_name, self.row_data, 'splits', self.splits)
+            self.parent().update_saved_leg(self.table_name, self.row_data, self.relay_swimmers[i][0],
+                                           self.leg_event_name(i), old, self.leg_times[i])
+            item.setText(self.format_time(self.leg_times[i]))
+            style_cell(item, True, True)
+        self.table.blockSignals(False)
+
+    def leg_event_name(self, i):
+        """Event name a leg gets when saved as an individual swim."""
+        if 'Medley' in self.row_data['event_name']:
+            strokes = ['Backstroke', 'Breaststroke', 'Butterfly', 'Freestyle']
+        else:
+            strokes = ['Freestyle'] * 4
+        leg_distance = self.row_data['event_distance'] // len(self.relay_swimmers)
+        leg_stroke = strokes[i] if i < len(strokes) else 'Freestyle'
+        leg_type = "lead-off" if self.relay_swimmers[i][2] == 1 else "relay"
+        return f"{leg_distance} {leg_stroke} ({leg_type})"
 
     def on_cell_clicked(self, row, col):
         if col == 0:
@@ -260,13 +329,41 @@ class RelayDetailsDialog(QDialog):
             self.table.item(i, 0).setCheckState(Qt.Checked)
 
     @staticmethod
-    def calculate_leg_times(splits, num_swimmers, event_distance):
+    def splits_are_cumulative(splits, finals_seconds=None):
+        """Cumulative splits only ever increase and, when the final time is
+        known, end at it. Without the final-time check, leg times that just
+        get slower (22.66, 22.67, 22.69, 22.77) were misread as cumulative."""
+        increasing = (len(splits) > 1 and
+                      all(splits[i] <= splits[i + 1] for i in range(len(splits) - 1)))
+        if increasing and finals_seconds:
+            return abs(splits[-1] - finals_seconds) < 1
+        return increasing
+
+    @staticmethod
+    def set_leg_time(splits, leg_index, num_swimmers, event_distance, finals_seconds, new_time):
+        """Return a copy of splits with one leg's time changed."""
+        splits = list(splits)
+        leg_distance = event_distance // num_swimmers if num_swimmers else 50
+        splits_per_leg = max(leg_distance // 50, 1)
+        if RelayDetailsDialog.splits_are_cumulative(splits, finals_seconds):
+            # Convert to per-leg form (times measured from each leg's start,
+            # the last one being the leg time) so an edit can't make the
+            # splits stop looking cumulative and get misread
+            per_leg = []
+            for j, value in enumerate(splits):
+                leg_start = j - j % splits_per_leg
+                per_leg.append(round(value - (splits[leg_start - 1] if leg_start else 0.0), 2))
+            splits = per_leg
+        splits[(leg_index + 1) * splits_per_leg - 1] = round(new_time, 2)
+        return splits
+
+    @staticmethod
+    def calculate_leg_times(splits, num_swimmers, event_distance, finals_seconds=None):
         """
         Calculate individual leg times from relay splits.
 
         Splits may be diff-based (from parenthesized values) or cumulative.
-        Auto-detects format: if monotonically increasing → cumulative,
-        otherwise → diff/split values.
+        Auto-detects format with splits_are_cumulative().
 
         For diff splits (e.g. 4x100):
           [22.46, 46.96, 24.65, 53.75, 21.31, 45.85, 20.37, 43.05]
@@ -285,9 +382,7 @@ class RelayDetailsDialog(QDialog):
         if splits_per_leg == 0:
             return []
 
-        # Auto-detect: monotonically increasing → cumulative
-        is_cumulative = (len(splits) > 1 and
-                         all(splits[i] <= splits[i + 1] for i in range(len(splits) - 1)))
+        is_cumulative = RelayDetailsDialog.splits_are_cumulative(splits, finals_seconds)
 
         leg_times = []
         prev_cumulative = 0.0
@@ -327,14 +422,7 @@ class RelayDetailsDialog(QDialog):
             QMessageBox.information(self, "Info", "No legs selected.")
             return
 
-        # Determine strokes
-        if 'Medley' in self.row_data['event_name']:
-            strokes = ['Backstroke', 'Breaststroke', 'Butterfly', 'Freestyle']
-        else:
-            strokes = ['Freestyle'] * 4
-
-        num_swimmers = len(self.relay_swimmers)
-        leg_distance = self.row_data['event_distance'] // num_swimmers if num_swimmers else 50
+        leg_distance = self.row_data['event_distance'] // len(self.relay_swimmers)
 
         saved_count = 0
         conn = sqlite3.connect(str(self.db_path))
@@ -359,9 +447,7 @@ class RelayDetailsDialog(QDialog):
             if not leg_time:
                 continue
 
-            leg_stroke = strokes[i] if i < len(strokes) else 'Freestyle'
-            leg_type = "lead-off" if leg == 1 else "relay"
-            leg_event = f"{leg_distance} {leg_stroke} ({leg_type})"
+            leg_event = self.leg_event_name(i)
             time_str = self.format_time(leg_time)
 
             try:
@@ -773,6 +859,9 @@ class MeetResultsApp(QMainWindow):
         self.results_table.cellDoubleClicked.connect(self.on_results_double_clicked)
         self.results_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.results_table.itemChanged.connect(self.on_results_item_changed)
+        self.results_table.setItemDelegateForColumn(9, StatusDelegate(self.results_table))
+        self.results_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.results_table.customContextMenuRequested.connect(self.on_results_context_menu)
         self.results_table.horizontalHeader().sectionClicked.connect(self.on_header_clicked)
 
         self.results_table.setColumnWidth(0, 30)
@@ -879,6 +968,8 @@ class MeetResultsApp(QMainWindow):
         self.saved_table.cellDoubleClicked.connect(self.on_saved_double_clicked)
         self.saved_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.saved_table.itemChanged.connect(self.on_saved_item_changed)
+        self.saved_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.saved_table.customContextMenuRequested.connect(self.on_saved_context_menu)
 
         # Set default column widths
         self.saved_table.setColumnWidth(0, 150)  # Name
@@ -1838,6 +1929,19 @@ class MeetResultsApp(QMainWindow):
             self.update_selection_label()
 
     def on_results_double_clicked(self, row, col):
+        if self.results_edit_check.isChecked() and col in RESULTS_EDIT_COLUMNS:
+            return  # the double-click edits the cell instead
+        self.open_result_details(row)
+
+    def on_results_context_menu(self, pos):
+        row = self.results_table.rowAt(pos.y())
+        if row < 0:
+            return
+        menu = QMenu(self)
+        menu.addAction("Show Details...", lambda: self.open_result_details(row))
+        menu.exec(self.results_table.viewport().mapToGlobal(pos))
+
+    def open_result_details(self, row):
         # Look up by id: header sorting reorders rows but not all_results
         rid = self.results_table.item(row, 0).data(Qt.UserRole)
         result = self.results_by_id.get(rid)
@@ -1845,13 +1949,11 @@ class MeetResultsApp(QMainWindow):
             return
 
         editing = self.results_edit_check.isChecked()
-        if editing and col in RESULTS_EDIT_COLUMNS:
-            return  # the double-click edits the cell instead
-
         if result['is_relay'] and result['relay_swimmers']:
             dialog = RelayDetailsDialog(self, result, DB_PATH, editable=editing, table='results')
             dialog.exec()
             self.update_saved_count()
+            self._refill_results_row(row, result)
         else:
             self.show_swim_details(result)
 
@@ -1859,8 +1961,8 @@ class MeetResultsApp(QMainWindow):
         if on:
             self.results_table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
             self.status_bar.showMessage(
-                "Edit Mode: double-click a cell to change it. Double-click a relay's "
-                "Round or Status to fix its swimmers.")
+                "Edit Mode: double-click a cell to change it. Right-click a relay and "
+                "choose Show Details to fix its swimmers or leg times.")
         else:
             self.results_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
             self.status_bar.showMessage("Edit Mode off")
@@ -1929,20 +2031,42 @@ class MeetResultsApp(QMainWindow):
             changed += cursor.rowcount
         return changed
 
-    def save_relay_swimmers(self, table, row, swimmers):
-        """Store relay swimmers edited in the relay details dialog."""
-        updates = {'relay_swimmers': json.dumps(swimmers)}
-        sets = dict(updates, edited_fields=add_edited_field(row.get('edited_fields'), 'relay_swimmers'))
+    def save_relay_data(self, table, row, field, value):
+        """Store relay swimmers or splits edited in the relay details dialog."""
+        updates = {field: json.dumps(value)}
+        sets = dict(updates, edited_fields=add_edited_field(row.get('edited_fields'), field))
         conn = self.get_db()
         cursor = conn.cursor()
-        cursor.execute(f"UPDATE {table} SET relay_swimmers = ?, edited_fields = ? WHERE id = ?",
-                       (sets['relay_swimmers'], sets['edited_fields'], row['id']))
+        cursor.execute(f"UPDATE {table} SET {field} = ?, edited_fields = ? WHERE id = ?",
+                       (sets[field], sets['edited_fields'], row['id']))
         if table == 'results':
-            self._update_saved_copies(cursor, row, updates, 'relay_swimmers')
+            self._update_saved_copies(cursor, row, updates, field)
         conn.commit()
         conn.close()
         row.update(sets)
-        self.status_bar.showMessage("Relay swimmers updated")
+        self.status_bar.showMessage("Relay swimmers updated" if field == 'relay_swimmers' else "Relay split updated")
+
+    def update_saved_leg(self, table, relay_row, name, leg_event, old_seconds, new_seconds):
+        """Carry an edited relay leg time over to that leg's saved individual swim."""
+        conn = self.get_db()
+        cursor = conn.cursor()
+        meet_name = relay_row.get('meet_name')
+        if table == 'results':
+            cursor.execute('SELECT meet_name FROM meets WHERE id = ?', (relay_row['meet_id'],))
+            meet = cursor.fetchone()
+            meet_name = meet['meet_name'] if meet else None
+        cursor.execute('''
+            SELECT id, edited_fields FROM saved_results
+            WHERE meet_name = ? AND name = ? AND event_name = ? AND ABS(finals_seconds - ?) < 0.005
+        ''', (meet_name, name, leg_event, old_seconds))
+        for leg in cursor.fetchall():
+            cursor.execute('''
+                UPDATE OR IGNORE saved_results SET finals_time = ?, finals_seconds = ?, edited_fields = ?
+                WHERE id = ?
+            ''', (self.format_time(new_seconds), new_seconds,
+                  add_edited_field(leg['edited_fields'], 'finals_time'), leg['id']))
+        conn.commit()
+        conn.close()
 
     def on_header_clicked(self, col):
         if col == 0:
@@ -2056,7 +2180,8 @@ class MeetResultsApp(QMainWindow):
             return 0
 
         # Calculate leg times
-        leg_times = self.calculate_relay_leg_times(splits, len(relay_swimmers), row['event_distance'])
+        leg_times = self.calculate_relay_leg_times(splits, len(relay_swimmers), row['event_distance'],
+                                                   row['finals_seconds'])
 
         # Determine strokes
         if 'Medley' in (row['event_name'] or ''):
@@ -2099,13 +2224,13 @@ class MeetResultsApp(QMainWindow):
 
         return saved_count
 
-    def calculate_relay_leg_times(self, splits, num_swimmers, event_distance):
+    def calculate_relay_leg_times(self, splits, num_swimmers, event_distance, finals_seconds=None):
         """Calculate individual leg times from cumulative relay splits.
 
         Same logic as calculate_leg_times — splits are cumulative from relay start.
         Each swimmer's leg time = their final cumulative - previous swimmer's final cumulative.
         """
-        return RelayDetailsDialog.calculate_leg_times(splits, num_swimmers, event_distance)
+        return RelayDetailsDialog.calculate_leg_times(splits, num_swimmers, event_distance, finals_seconds)
 
     def get_stroke_pattern(self, stroke):
         """Convert stroke name to SQL LIKE pattern for event_name matching"""
@@ -2481,8 +2606,8 @@ class MeetResultsApp(QMainWindow):
         if on:
             self.saved_table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
             self.status_bar.showMessage(
-                "Edit Mode: double-click a cell to change it. Double-click a relay's "
-                "Meet or Date to fix its swimmers.")
+                "Edit Mode: double-click a cell to change it. Right-click a relay and "
+                "choose Show Details to fix its swimmers or leg times.")
         else:
             self.saved_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
             self.status_bar.showMessage("Edit Mode off")
@@ -2535,9 +2660,20 @@ class MeetResultsApp(QMainWindow):
 
     def on_saved_double_clicked(self, row, col):
         """Handle double-click on saved results to show details"""
-        editing = self.saved_edit_check.isChecked()
-        if editing and col in SAVED_EDIT_COLUMNS:
+        if self.saved_edit_check.isChecked() and col in SAVED_EDIT_COLUMNS:
             return  # the double-click edits the cell instead
+        self.open_saved_details(row)
+
+    def on_saved_context_menu(self, pos):
+        row = self.saved_table.rowAt(pos.y())
+        if row < 0:
+            return
+        menu = QMenu(self)
+        menu.addAction("Show Details...", lambda: self.open_saved_details(row))
+        menu.exec(self.saved_table.viewport().mapToGlobal(pos))
+
+    def open_saved_details(self, row):
+        editing = self.saved_edit_check.isChecked()
         name_item = self.saved_table.item(row, 0)  # Name is now at column 0
         if not name_item:
             return
