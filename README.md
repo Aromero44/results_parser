@@ -42,10 +42,12 @@ This creates a `results_parser` folder in your current location. If you don't kn
 
 ### Step 3: Run the App
 
-Double-click the file called **`HY-TEK Results.command`** in the app folder. The first time, it installs the libraries the app needs (a few minutes), then opens the app.
+**The first time only:** double-click **`HY-TEK Results.command`** in the app folder. A Terminal window opens and installs the libraries the app needs (a few minutes), then the app opens.
 
-- The first time, Mac may say "cannot be opened because it is from an unidentified developer."
-- If that happens: right-click the file, choose **Open**, then click **Open** in the popup. You only have to do this once.
+**After that:** double-click the **HY-TEK Results** app (the one with the app icon) in the same folder.
+
+- The first time you open each one, your Mac may say it "cannot be opened" or "cannot verify the developer". Right-click the file, choose **Open**, then click **Open** again. On newer macOS versions, if there's no Open button, go to **System Settings > Privacy & Security**, scroll down, and click **Open Anyway**. You only have to do this once per file.
+- **Keep the app inside the app folder.** It finds the app files in the folder it's in, so don't move it to Applications. Add it to the Dock instead (see below).
 
 ---
 
@@ -92,13 +94,13 @@ If you see `No such file or directory: 'requirements.txt'`, you're in the wrong 
 **Add to Dock (quickest):**
 
 1. Open Finder and navigate to the app folder
-2. Drag **`HY-TEK Results.command`** onto your **Dock** (the bar of icons at the bottom of your screen), dropping it on the right side near the Trash
+2. Drag the **HY-TEK Results** app onto your **Dock** (the bar of icons at the bottom of your screen). This adds a shortcut; the app itself stays in its folder.
 3. Now you can click it from the Dock anytime to launch the app
 
 **Create a Desktop shortcut:**
 
 1. Open Finder and navigate to the app folder
-2. Hold **Option + Command** and drag **`HY-TEK Results.command`** to your **Desktop**. This creates a shortcut (alias) while keeping the original in place.
+2. Hold **Option + Command** and drag the **HY-TEK Results** app to your **Desktop**. This creates a shortcut (alias) while keeping the original in place.
 3. You can rename it by clicking the name, waiting a moment, then clicking again to edit
 
 ### Windows
